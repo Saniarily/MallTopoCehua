@@ -10,4 +10,6 @@ stage2:
       thresholds: {node_deviation_pct_max: 30, edge_accuracy_pct_min: 70, density_deviation_pct_max: 40, aspl_deviation_pct_max: 35, inference_time_s_max: 60}
   geometry_evaluator: {name: geometry, params: {min_inside_ratio: 0.98, max_overlap_rate: 0.01, min_reachable_rate: 0.9}}
 n_candidates: 3
+corpus: data/samples/synthetic/sharegpt_sample.json   # real path via rule_baseline.local.yaml or --corpus
+eval_holdout: 600
 output_dir: outputs/generated_layouts

@@ -11,3 +11,4 @@ compare_configs:
   - configs/stage1/lgbm_lambdarank.yaml
   - configs/stage1/lgbm_lambdarank_valuegrade.yaml
   - configs/stage1/mlp.yaml
+  - configs/stage1/deep_residual.yaml

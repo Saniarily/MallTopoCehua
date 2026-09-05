@@ -1,2 +1,4 @@
 _base_: base.yaml
 experiment_name: stage1_rule_knn
+stage1:
+  ranker: {name: weighted_rule, params: {w_quality: 0.6, w_similarity: 0.4}}

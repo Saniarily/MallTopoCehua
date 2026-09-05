@@ -1,0 +1,9 @@
+# Deep ranker ablation: which ingredient matters? (3 seeds). Compare with extra_trees baseline via model_comparison.
+base_config: configs/stage1/deep_residual.yaml
+seeds: [42, 43, 44]
+factors:
+  - {name: full_residual_tf_gnn, overrides: {}}
+  - {name: no_residual_end2end, overrides: {stage1.ranker.params.use_residual: false}}
+  - {name: no_gnn, overrides: {stage1.ranker.params.use_gnn: false}}
+  - {name: mlp_instead_of_transformer, overrides: {stage1.ranker.params.use_transformer: false}}
+  - {name: no_smallsample_tricks, overrides: {stage1.ranker.params.feature_noise: 0.0, stage1.ranker.params.node_dropout: 0.0, stage1.ranker.params.ensemble_k: 1}}

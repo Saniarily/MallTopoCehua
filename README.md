@@ -7,7 +7,7 @@
 ```bash
 conda activate mallranker
 pip install -e ".[dev]"            # 核心依赖；可选: ".[boosting]" ".[deep]" ".[app]" ".[tracking]"
-pytest -v                          # 13 tests（含合成数据 smoke test）
+pytest -v                          # 36 tests（含合成数据 smoke test；深度模型测试需 .[deep]）
 ```
 
 ## 经过验证的命令
@@ -18,7 +18,7 @@ python scripts/audit_legacy_repo.py --legacy-repo /Users/saniarily/Desktop/Codin
 python scripts/prepare_data.py --config configs/data/synthetic.yaml
 python scripts/prepare_data.py --config configs/data/legacy.yaml --override processed_dir=data/processed/legacy
 # 阶段一训练（默认读真实数据 data/processed/legacy；合成数据加 --override data.processed_dir=data/processed/synthetic）
-# 模型切换只改配置：rule_knn | ridge | random_forest | extra_trees | mlp | lgbm_regressor | lgbm_lambdarank
+# 模型切换只改配置：rule_knn | ridge | random_forest | extra_trees(默认) | mlp | lgbm_regressor | lgbm_lambdarank | deep_residual(Transformer+GNN 残差融合)
 python scripts/train_stage1.py --config configs/stage1/lgbm_lambdarank.yaml            # 写 val/test 指标 + checkpoint + run.json
 python scripts/evaluate_stage1.py --config configs/stage1/lgbm_lambdarank.yaml \
     --checkpoint outputs/experiments/stage1/stage1_lgbm_lambdarank/seed_42/checkpoint
@@ -34,8 +34,15 @@ python scripts/run_e2e.py --condition data/samples/query_example.json --pick 1 -
     --target-nodes 40 --target-shops 50 --shop-area 60 300
 # 原型保真度协议（label-free）+ 条件→布局类型可预测性
 python scripts/evaluate_fidelity.py --config configs/stage1/ridge.yaml --configs configs/stage1/lgbm_lambdarank.yaml
-# 真实数据一键跑完当前轮全部实验（Mac）
+# 布局类型决策：E[score | 条件, 类型]（多 seed 评估）；端到端时用 --use-top-type 只在推荐类型内检索
+python scripts/evaluate_type_recommender.py --config configs/stage1/base.yaml --seeds 42 43 44
+python scripts/run_e2e.py --condition data/samples/query_example.json --use-top-type --pick 1 --width 180 --height 120
+# 阶段二 AR-GNN：训练（自动留出语料最后 600 条）→ 与 rule/search 在同一留出集比较
+python scripts/train_stage2.py --config configs/stage2/ar_gnn.yaml --corpus /path/to/sharegpt_data.json --override stage2.generator.params.checkpoint=null
+python scripts/evaluate_stage2.py --config configs/stage2/ar_gnn_bestof16.yaml --corpus /path/to/sharegpt_data.json --limit 600
+# 真实数据一键脚本（Mac）：第 1–2 轮 / 第 3 轮（Phase 4）
 bash scripts/run_real_data_phase2.sh
+CORPUS=/path/to/sharegpt_data.json bash scripts/run_real_data_phase4.sh
 ```
 
 ## 目录
@@ -45,10 +52,11 @@ bash scripts/run_real_data_phase2.sh
 ## 机器相关路径
 复制 `configs/data/legacy.local.yaml.example` → `legacy.local.yaml`（git 忽略）填写本机路径；任何 `<cfg>.local.yaml` 都会自动覆盖同名配置。
 
-## 状态（Phase 0–3 完成）
+## 状态（Phase 0–4 代码完成；Phase 4 真实数据待运行）
 - ✅ 审计 / Schema / registry / 适配器（含真实 97 列表的 18 个额外拓扑列与 `type8` 布局类型）/ 无泄漏划分
-- ✅ 阶段一：硬约束过滤 + kNN 召回 + 7 种 ranker（含 **LambdaMART**、MLP）+ 模板解释 + 反事实 + 多 seed 消融/对比脚本
-- ✅ 阶段二：rule / **search** 扩展器 + 走廊缓冲/中庭/临街店铺/主力店分区 + 修复器 + 拓扑&几何双评估 + JSON/GeoJSON/SVG/PNG
-- ✅ 端到端 `run_e2e.py` 与 UI 无关的 `PlanningService`；21 个测试通过
-- ⏳ 待运行：真实数据全部实验（`bash scripts/run_real_data_phase2.sh`）
-- ⏳ 待实现（Phase 4–5）：GNN/双塔残差融合、学习型图编辑生成器、学习型校准器、MLflow、Streamlit Viewer Hub、FastAPI
+- ✅ 阶段一：**类型条件化质量模型** E[score | 条件, 类型]（`recommend_types → recommend_within_type`）+ 硬约束过滤 + kNN 召回 + 10 种 ranker（经典 / LTR / 上下界参照 / **deep_residual** Transformer+GIN 残差融合）+ 解释 + 反事实 + 多 seed 消融
+- ✅ 阶段二：rule / search / **ar_gnn**（自回归 GNN，原型结构性保持）扩展器 + 几何解码 + 修复器 + 拓扑&几何双评估 + JSON/GeoJSON/SVG/PNG
+- ✅ 原型保真度协议、真实数据第 1–2 轮结果（`docs/experiments.md`）；36 个测试通过
+- ⏳ 待运行：第 3 轮真实实验 `run_real_data_phase4.sh`（deep_residual 比较与消融、类型模型评估、AR-GNN 训练与 4 方法比较）
+- ⏳ 待实现（Phase 5）：Streamlit Viewer Hub（数据浏览 / 实验看板 / 策划工作台）、FastAPI、学习型校准器、MLflow（可选）
+详见 `docs/methodology.md`、`docs/innovation_points.md`、`docs/experiments.md`。

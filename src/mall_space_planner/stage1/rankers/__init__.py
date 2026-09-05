@@ -13,7 +13,13 @@ try:  # optional dependency
 except ImportError:  # pragma: no cover
     LGBMLambdaRankRanker = LGBMPointwiseRanker = None  # type: ignore[assignment,misc]
 
+try:  # optional dependency (torch)
+    from mall_space_planner.stage1.rankers.deep_ranker import DeepResidualRanker
+except ImportError:  # pragma: no cover
+    DeepResidualRanker = None  # type: ignore[assignment,misc]
+
 __all__ = [
+    "DeepResidualRanker",
     "WeightedRuleRanker",
     "RandomRanker",
     "QualityOracleRanker",

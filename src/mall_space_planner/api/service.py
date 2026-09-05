@@ -14,6 +14,7 @@ from mall_space_planner.data.case_db import CaseDatabase
 from mall_space_planner.geometry.export import layout_to_geojson, layout_to_json, layout_to_svg
 from mall_space_planner.schemas import ConstraintSet, EvaluationResult, GeneratedLayout, PlanningCondition, Recommendation, SiteBoundary
 from mall_space_planner.stage1.pipelines.recommend import Stage1Pipeline
+from mall_space_planner.stage1.type_recommender import TreeTypeRecommender, TypeRecommenderResult
 from mall_space_planner.stage2.base import GenerationRequest
 from mall_space_planner.stage2.pipelines.generate import Stage2Pipeline
 from mall_space_planner.utils.logging import get_logger
@@ -35,6 +36,22 @@ class PlanningService:
             logger.info("No checkpoint given/found; fitting Stage-1 pipeline in-process")
             self.stage1 = Stage1Pipeline(stage1_cfg, db).fit()
         self.stage2 = Stage2Pipeline(stage2_cfg)
+        tcfg = stage1_cfg.get("stage1", {}).get("type_recommender", {"enabled": True})
+        self.type_rec: TreeTypeRecommender | None = None
+        if tcfg and tcfg.get("enabled", True):
+            self.type_rec = TreeTypeRecommender(**{k: v for k, v in tcfg.items() if k != "enabled"}).fit(db, db.split("train"))
+
+    # ------------------------------------------------------------------ layout type (design decision support)
+    def recommend_types(self, condition: PlanningCondition) -> TypeRecommenderResult | None:
+        """Expected quality per layout type under the given conditions (E[score | conditions, type])."""
+        return self.type_rec.recommend(self.db, condition) if self.type_rec is not None else None
+
+    def recommend_within_type(self, condition: PlanningCondition, layout_type: str, top_k: int = 10, **kw: Any) -> list[Recommendation]:
+        """Quality-aware comparable-case retrieval restricted to the user-selected layout type."""
+        from mall_space_planner.schemas import LayoutType
+
+        q = condition.model_copy(update={"preferred_layout": LayoutType(layout_type)})
+        return self.stage1.recommend(q, top_k=top_k, **kw)
 
     # ------------------------------------------------------------------ stage 1
     def recommend(self, condition: PlanningCondition, top_k: int = 10, with_counterfactuals: bool = True) -> list[Recommendation]:
