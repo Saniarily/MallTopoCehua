@@ -65,6 +65,10 @@ class CaseDatabase:
     def graph_metric_cols(self) -> list[str]:
         return list(self.manifest.get("graph_metric_cols", []))
 
+    @property
+    def extra_metric_cols(self) -> list[str]:
+        return [c for c in self.manifest.get("extra_metric_cols", []) if c in self.cases.columns]
+
     def split(self, name: str) -> pd.DataFrame:
         if "split" not in self.cases.columns:
             raise KeyError("case table has no 'split' column")

@@ -1,0 +1,14 @@
+{
+  "city_cluster": 1,
+  "city_name": "北京市",
+  "people": 2186,
+  "GDP_2023": 43760.7,
+  "PCDI_2023": 81752,
+  "TP_2023": 2186,
+  "mall_area_count": 78,
+  "nearest_distance_km": 0.3,
+  "count_1km": 6,
+  "count_2km": 14,
+  "total_area": 60000,
+  "Tx": 22
+}

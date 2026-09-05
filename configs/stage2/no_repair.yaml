@@ -1,0 +1,4 @@
+_base_: rule_baseline.yaml
+experiment_name: stage2_no_repair
+stage2:
+  repairer: null

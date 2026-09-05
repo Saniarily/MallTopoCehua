@@ -36,6 +36,6 @@ def test_stage2_rule_baseline(synthetic_db, tmp_path):
     results = Stage2Pipeline({"stage2": {}}).run(req)
     assert len(results) == 2
     for lay, res in results:
-        assert res.metrics["edge_accuracy_pct"] == 100.0 and res.metrics["node_deviation_pct"] <= 30 and lay.diagnostics["inside_ratio"] == 1.0
+        assert res.metrics["topo_edge_accuracy_pct"] == 100.0 and res.metrics["topo_node_deviation_pct"] <= 30 and lay.diagnostics["inside_ratio"] == 1.0
     layout_to_svg(results[0][0], tmp_path / "a.svg"); layout_to_geojson(results[0][0], tmp_path / "a.geojson")
     assert (tmp_path / "a.svg").exists() and (tmp_path / "a.geojson").exists()

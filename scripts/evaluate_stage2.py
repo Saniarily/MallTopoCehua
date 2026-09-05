@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Evaluate a Stage-2 generator config on the ShareGPT corpus (or its synthetic stand-in).
+
+For each sample: skeleton → generate with N_target from the prompt → spec metrics vs. skeleton
+and (optionally) vs. the ground-truth expansion. Writes per-sample CSV + aggregate JSON.
+"""
+from __future__ import annotations
+import json, time
+from pathlib import Path
+import numpy as np, pandas as pd
+from _common import ROOT, base_parser
+from mall_space_planner.data.sharegpt_adapter import load_sharegpt
+from mall_space_planner.evaluation.stage2_eval import TopologySpecEvaluator
+from mall_space_planner.registry import build
+from mall_space_planner.schemas import ConstraintSet, SiteBoundary, TopologyPrototype
+from mall_space_planner.stage2.base import GenerationRequest
+from mall_space_planner.utils import ProjectPaths, resolve_config, setup_logging
+
+def main() -> None:
+    p = base_parser("Evaluate stage 2 on skeleton→topology corpus"); p.add_argument("--corpus", default="data/samples/synthetic/sharegpt_sample.json"); p.add_argument("--limit", type=int, default=200); p.add_argument("--seed", type=int, default=0)
+    a = p.parse_args(); setup_logging(a.log_level); cfg = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT)
+    samples = load_sharegpt(paths.resolve(a.corpus), limit=a.limit); gen = build("generator", cfg["stage2"]["generator"]); ev: TopologySpecEvaluator = build("evaluator", cfg["stage2"].get("evaluator", {"name": "topology_spec"}))
+    rows = []
+    for s in samples:
+        n_t = s.target_num_nodes or s.target.num_nodes
+        req = GenerationRequest(prototype=TopologyPrototype(prototype_id=s.sample_id, graph=s.skeleton, layout_type=s.layout_type), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t, layout_type=s.layout_type), seed=a.seed)
+        t0 = time.perf_counter(); g = gen.generate(req, a.seed); dt = time.perf_counter() - t0
+        r = ev.evaluate(s.skeleton, g, n_t, inference_time_s=dt, target=s.target)
+        rows.append({"sample_id": s.sample_id, "layout": s.layout_type.value if s.layout_type else None, "n_skeleton": s.skeleton.num_nodes, "n_target": n_t, "overall_pass": r.overall_pass, **{k: v for k, v in r.metrics.items()}, **{f"pass_{k}": v for k, v in r.passed.items()}})
+    df = pd.DataFrame(rows); name = cfg.get("experiment_name", "stage2"); out = paths.resolve(cfg.get("output_dir", "outputs/experiments")) / "stage2_eval" / name; out.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out / "per_sample.csv", index=False)
+    num = df.select_dtypes(include=[np.number, bool]); agg = {"n_samples": int(len(df)), "generator": cfg["stage2"]["generator"]["name"], **{c: float(num[c].mean()) for c in num.columns}}
+    agg["by_layout"] = df.groupby("layout")[["overall_pass", "node_deviation_pct", "density_deviation_pct", "aspl_deviation_pct"]].mean().round(3).to_dict("index")
+    (out / "aggregate.json").write_text(json.dumps(agg, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in agg.items() if k != "by_layout"}, ensure_ascii=False, indent=1)); print(f"written: {out}")
+
+if __name__ == "__main__":
+    main()

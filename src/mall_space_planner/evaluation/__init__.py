@@ -12,6 +12,7 @@ from mall_space_planner.evaluation.ranking_metrics import (
     spearman,
 )
 from mall_space_planner.evaluation.stage1_eval import evaluate_stage1
+from mall_space_planner.evaluation.geometry_eval import GeometryEvaluator
 from mall_space_planner.evaluation.stage2_eval import TopologySpecEvaluator
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "spearman",
     "evaluate_stage1",
     "TopologySpecEvaluator",
+    "GeometryEvaluator",
 ]

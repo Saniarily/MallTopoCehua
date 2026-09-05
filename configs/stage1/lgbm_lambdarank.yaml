@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_lgbm_lambdarank
+stage1:
+  ranker: {name: lgbm_lambdarank, params: {num_rounds: 400, candidates_per_query: 30, n_grades: 5, learning_rate: 0.05, num_leaves: 31, min_data_in_leaf: 20}}

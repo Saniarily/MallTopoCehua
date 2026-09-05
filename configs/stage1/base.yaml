@@ -1,5 +1,7 @@
 seed: 42
-data: {processed_dir: data/processed/synthetic}
+# Default = real data (run scripts/prepare_data.py --config configs/data/legacy.yaml first).
+# For smoke runs: --override data.processed_dir=data/processed/synthetic
+data: {processed_dir: data/processed/legacy}
 features:
   use_condition: true
   use_prototype_metrics: true

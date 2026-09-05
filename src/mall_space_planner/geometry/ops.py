@@ -14,25 +14,51 @@ def boundary_polygon(b: SiteBoundary) -> Polygon:
     return Polygon(b.exterior, holes=b.holes or None)
 
 
-def normalize_positions(pos: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
-    """Centre and scale positions to the unit square [0,1]^2."""
+def normalize_positions(pos: dict[str, tuple[float, float]], keep_aspect: bool = True) -> dict[str, tuple[float, float]]:
+    """Scale positions into the unit square [0,1]^2.
+
+    With ``keep_aspect`` (default) a single uniform scale is used and the shorter axis is
+    centred, so a linear skeleton stays linear instead of being stretched to fill the box.
+    """
     if not pos:
         return {}
     arr = np.array(list(pos.values()), dtype=float)
     lo, hi = arr.min(axis=0), arr.max(axis=0)
     span = np.where(hi - lo < 1e-9, 1.0, hi - lo)
-    arr = (arr - lo) / span
+    if keep_aspect:
+        s = float(span.max())
+        arr = (arr - lo) / s
+        arr += (1.0 - (hi - lo) / s) / 2.0  # centre the shorter axis
+    else:
+        arr = (arr - lo) / span
     return {k: (float(x), float(y)) for k, (x, y) in zip(pos.keys(), arr, strict=True)}
 
 
-def layout_positions(graph: TopologyGraph, seed: int = 0) -> dict[str, tuple[float, float]]:
-    """Use prototype coordinates when present, otherwise a seeded spring layout."""
+def layout_positions(graph: TopologyGraph, seed: int = 0, keep_aspect: bool = True) -> dict[str, tuple[float, float]]:
+    """Use prototype coordinates when present; place new nodes with a seeded spring layout.
+
+    Known (skeleton) nodes are fixed; unknown (expanded) nodes are initialised next to a
+    known neighbour so that branches stay short and local.
+    """
     g = to_networkx(graph)
     known = {n: graph.positions[n] for n in graph.nodes if n in graph.positions}
     if len(known) == len(graph.nodes) and known:
-        return normalize_positions(known)
-    pos = nx.spring_layout(g, pos=known or None, fixed=list(known) or None, seed=seed, iterations=200)
-    return normalize_positions({str(k): (float(v[0]), float(v[1])) for k, v in pos.items()})
+        return normalize_positions(known, keep_aspect)
+    if known:
+        known = normalize_positions(known, keep_aspect)
+        rng = np.random.RandomState(seed)
+        init = dict(known)
+        for n in graph.nodes:
+            if n in init:
+                continue
+            nbrs = [m for m in g.neighbors(n) if m in init]
+            base = np.mean([init[m] for m in nbrs], axis=0) if nbrs else np.array([0.5, 0.5])
+            init[n] = (float(base[0] + rng.normal(0, 0.05)), float(base[1] + rng.normal(0, 0.05)))
+        k = 0.6 / np.sqrt(max(1, g.number_of_nodes()))
+        pos = nx.spring_layout(g, pos=init, fixed=list(known), k=k, seed=seed, iterations=100)
+    else:
+        pos = nx.spring_layout(g, seed=seed, iterations=200)
+    return normalize_positions({str(k): (float(v[0]), float(v[1])) for k, v in pos.items()}, keep_aspect)
 
 
 def fit_positions_to_boundary(
