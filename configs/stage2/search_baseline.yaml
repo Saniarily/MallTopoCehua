@@ -1,0 +1,4 @@
+_base_: rule_baseline.yaml
+experiment_name: stage2_search_baseline
+stage2:
+  generator: {name: search_expander, params: {n_trials: 16, w_aspl: 1.5}}

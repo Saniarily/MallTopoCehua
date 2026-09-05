@@ -39,10 +39,12 @@ class FeatureSpec:
     query_cols: list[str]
     metric_cols: list[str]
     graph_metric_cols: list[str] = field(default_factory=list)
+    extra_metric_cols: list[str] = field(default_factory=list)
     log1p_cols: list[str] = field(default_factory=lambda: list(HEAVY_TAIL_DEFAULT))
     use_condition: bool = True
     use_prototype_metrics: bool = True
     use_graph_metrics: bool = True
+    use_extra_metrics: bool = True
     use_match: bool = True
     city_cluster_col: str = "city_cluster"
     total_area_col: str = "total_area"
@@ -100,7 +102,11 @@ class TabularFeatureBuilder:
         self.spec = spec if isinstance(spec, FeatureSpec) else FeatureSpec(**spec)
         s = self.spec
         self.cond_scaler = _ColumnScaler(s.query_cols, s.log1p_cols)
-        proto_cols = (s.metric_cols if s.use_prototype_metrics else []) + (s.graph_metric_cols if s.use_graph_metrics else [])
+        proto_cols = (
+            (s.metric_cols if s.use_prototype_metrics else [])
+            + (s.graph_metric_cols if s.use_graph_metrics else [])
+            + (s.extra_metric_cols if s.use_extra_metrics else [])
+        )
         self.proto_scaler = _ColumnScaler(proto_cols, [])
         self.fitted = False
 

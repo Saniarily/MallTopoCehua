@@ -46,6 +46,44 @@ DEFAULT_QUERY_COLS: tuple[str, ...] = (
 )
 DEFAULT_METRIC_COLS: tuple[str, ...] = ("L1_density", "L2_diameter", "L2_complexity", "L2_integration")
 
+# Additional floor-level descriptors confirmed in the real 97-column main table (2026-09-05 audit).
+# They are candidate-side (prototype) features; all are optional and only used when present.
+DEFAULT_EXTRA_METRIC_COLS: tuple[str, ...] = (
+    "corridor_area_ratio",
+    "area_corridor",
+    "total_perimeter",
+    "Topological_Diameter",
+    "Topological_Complexity",
+    "Betweenness_Variance",
+    "Global_Integration",
+    "L1_diameter",
+    "L1_clustering",
+    "L2_bc_variance",
+    "L3_efficiency",
+    "L3_morphology",
+    "L3_balance",
+    "L3_integration",
+    "s_mean_degree",
+    "s_mean_closeness_centrality",
+    "s_mean_betweenness_centrality",
+    "s_mean_mean_depth",
+)
+# Categorical / passthrough columns kept for filtering, display and explanation.
+DEFAULT_PASSTHROUGH_COLS: tuple[str, ...] = (
+    "floor",
+    "type8",
+    "cityname",
+    "adname",
+    "lon",
+    "lat",
+    "mall_category_simplified",
+    "city_cluster_6",
+    "score_num",
+    "score_facility",
+    "score_environment",
+    "score_service",
+)
+
 
 @dataclass
 class LegacyDataSpec:
@@ -62,6 +100,9 @@ class LegacyDataSpec:
     total_area_col: str = "total_area"
     query_cols: list[str] = field(default_factory=lambda: list(DEFAULT_QUERY_COLS))
     metric_cols: list[str] = field(default_factory=lambda: list(DEFAULT_METRIC_COLS))
+    extra_metric_cols: list[str] = field(default_factory=lambda: list(DEFAULT_EXTRA_METRIC_COLS))
+    passthrough_cols: list[str] = field(default_factory=lambda: list(DEFAULT_PASSTHROUGH_COLS))
+    layout_col: str = "type8"
 
     @classmethod
     def from_config(cls, cfg: dict) -> LegacyDataSpec:
@@ -78,6 +119,9 @@ class LegacyDataSpec:
             total_area_col=f.get("total_area_col", "total_area"),
             query_cols=list(f.get("query_cols", DEFAULT_QUERY_COLS)),
             metric_cols=list(f.get("metric_cols", DEFAULT_METRIC_COLS)),
+            extra_metric_cols=list(f.get("extra_metric_cols", DEFAULT_EXTRA_METRIC_COLS)),
+            passthrough_cols=list(f.get("passthrough_cols", DEFAULT_PASSTHROUGH_COLS)),
+            layout_col=f.get("layout_col", "type8"),
         )
 
     def available(self) -> bool:
@@ -167,6 +211,13 @@ def load_main_table(spec: LegacyDataSpec) -> pd.DataFrame:
         raise KeyError(f"Main table is missing configured columns: {missing}")
     df[spec.id_col] = df[spec.id_col].astype(str)
     df[spec.mall_id_col] = df[spec.mall_id_col].astype(str)
+    n_dup = int(df[spec.id_col].duplicated().sum())
+    if n_dup:
+        logger.warning("Dropping %d duplicated %s rows (keeping first occurrence)", n_dup, spec.id_col)
+        df = df.drop_duplicates(subset=[spec.id_col], keep="first").reset_index(drop=True)
+    # Standardised layout column (real table: `type8`; synthetic: `layout_type`).
+    if "layout_type" not in df.columns and spec.layout_col in df.columns:
+        df["layout_type"] = df[spec.layout_col].astype(str).where(df[spec.layout_col].notna(), None)
     return df
 
 

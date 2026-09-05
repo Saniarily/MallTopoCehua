@@ -1,0 +1,5 @@
+_base_: rule_baseline.yaml
+experiment_name: stage2_skeleton_only
+stage2:
+  geometry_decoder: {name: skeleton_embed, params: {margin_frac: 0.08}}
+  repairer: null

@@ -33,32 +33,62 @@ def make_bucket_id(df: pd.DataFrame, city_col: str, area_col: str, thresholds: l
     return df[city_col].astype(str) + "_" + bins.astype(str)
 
 
+def sample_groups(
+    df: pd.DataFrame,
+    label_col: str,
+    mall_col: str,
+    bucket: pd.Series,
+    candidates_per_query: int,
+    rng: np.random.RandomState,
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, list[int]]:
+    """Build listwise training groups.
+
+    For every query floor: candidates are floors of the same bucket **from other malls**
+    (mirrors the evaluation protocol; same-mall floors share the label and every query
+    feature, so they would only teach the model to copy). Relevance is the candidate's
+    label min-max normalised within the sampled group.
+
+    Returns aligned (query rows, candidate rows, relevance) and the group sizes.
+    """
+    q_idx: list[int] = []
+    c_idx: list[int] = []
+    rel: list[float] = []
+    groups: list[int] = []
+    df = df[df[label_col].notna()]
+    for _, g in df.groupby(bucket):
+        if len(g) < 3:
+            continue
+        idx = g.index.to_numpy()
+        malls = g[mall_col].to_numpy()
+        y_all = g[label_col].astype(float).to_numpy()
+        for pos, qi in enumerate(idx):
+            mask = malls != malls[pos]
+            others = idx[mask]
+            if len(others) < 2:
+                continue
+            take = rng.choice(others, size=min(candidates_per_query, len(others)), replace=False)
+            y = y_all[np.searchsorted(idx, take)]
+            lo, hi = float(y.min()), float(y.max())
+            if hi - lo < 1e-9:
+                continue  # no ordering information in this group
+            q_idx.extend([qi] * len(take))
+            c_idx.extend(take.tolist())
+            rel.extend(((y - lo) / (hi - lo)).tolist())
+            groups.append(len(take))
+    return df.loc[q_idx].reset_index(drop=True), df.loc[c_idx].reset_index(drop=True), np.asarray(rel, dtype=np.float32), groups
+
+
 def sample_pairs(
     df: pd.DataFrame,
     label_col: str,
     bucket: pd.Series,
     pairs_per_query: int,
     rng: np.random.RandomState,
+    mall_col: str = "mall_id",
 ) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
-    """Return aligned (query rows, candidate rows, graded relevance) frames."""
-    q_idx: list[int] = []
-    c_idx: list[int] = []
-    rel: list[float] = []
-    for _, g in df.groupby(bucket):
-        if len(g) < 3:
-            continue
-        y = g[label_col].astype(float).to_numpy()
-        lo, hi = float(np.nanmin(y)), float(np.nanmax(y))
-        scale = (hi - lo) if hi > lo else 1.0
-        idx = g.index.to_numpy()
-        for qi in idx:
-            others = idx[idx != qi]
-            take = rng.choice(others, size=min(pairs_per_query, len(others)), replace=False)
-            for ci in take:
-                q_idx.append(qi)
-                c_idx.append(ci)
-                rel.append((float(df.at[ci, label_col]) - lo) / scale)
-    return df.loc[q_idx].reset_index(drop=True), df.loc[c_idx].reset_index(drop=True), np.asarray(rel, dtype=np.float32)
+    """Pointwise view of :func:`sample_groups` (group sizes dropped)."""
+    q, c, rel, _ = sample_groups(df, label_col, mall_col, bucket, pairs_per_query, rng)
+    return q, c, rel
 
 
 class _SklearnPointwiseRanker(BaseRanker):
@@ -80,7 +110,7 @@ class _SklearnPointwiseRanker(BaseRanker):
         rng = np.random.RandomState(self.seed)
         spec = ctx.features.spec
         bucket = make_bucket_id(train_df, spec.city_cluster_col, spec.total_area_col, self.area_thresholds)
-        q_df, c_df, rel = sample_pairs(train_df, ctx.db.label_col, bucket, self.pairs_per_query, rng)
+        q_df, c_df, rel = sample_pairs(train_df, ctx.db.label_col, bucket, self.pairs_per_query, rng, ctx.db.mall_id_col)
         if len(rel) == 0:
             raise ValueError("No training pairs could be sampled (buckets too small)")
         x, names = ctx.features.pair_features(q_df, c_df)
@@ -88,9 +118,16 @@ class _SklearnPointwiseRanker(BaseRanker):
         self.model.fit(x, rel)
         train_mse = float(np.mean((self.model.predict(x) - rel) ** 2))
         self.history_ = {"train_mse": [train_mse]}
+        if getattr(self.model, "feature_importances_", None) is None and getattr(self.model, "coef_", None) is None:
+            # Model-agnostic importance (permutation) so every ranker can feed the explainer.
+            from sklearn.inspection import permutation_importance
+
+            sub = rng.choice(len(x), size=min(2000, len(x)), replace=False)
+            pi = permutation_importance(self.model, x[sub], rel[sub], n_repeats=3, random_state=self.seed, scoring="neg_mean_squared_error")
+            self.perm_importance_ = np.clip(pi.importances_mean, 0, None)
         if val_df is not None and len(val_df) > 3:
             vb = make_bucket_id(val_df, spec.city_cluster_col, spec.total_area_col, self.area_thresholds)
-            vq, vc, vrel = sample_pairs(val_df, ctx.db.label_col, vb, min(10, self.pairs_per_query), rng)
+            vq, vc, vrel = sample_pairs(val_df, ctx.db.label_col, vb, min(10, self.pairs_per_query), rng, ctx.db.mall_id_col)
             if len(vrel):
                 vx, _ = ctx.features.pair_features(vq, vc)
                 self.history_["val_mse"] = [float(np.mean((self.model.predict(vx) - vrel) ** 2))]
@@ -105,9 +142,9 @@ class _SklearnPointwiseRanker(BaseRanker):
         imp = getattr(self.model, "feature_importances_", None)
         if imp is None:
             coef = getattr(self.model, "coef_", None)
-            if coef is None:
+            imp = np.abs(coef) if coef is not None else getattr(self, "perm_importance_", None)
+            if imp is None:
                 return None
-            imp = np.abs(coef)
         return {n: float(v) for n, v in zip(self.feature_names_, imp, strict=False)}
 
     def training_history(self) -> dict[str, list[float]]:
@@ -136,3 +173,15 @@ class LinearPointwiseRanker(_SklearnPointwiseRanker):
         defaults = {"alpha": 1.0}
         defaults.update(params)
         return Ridge(**defaults)
+
+
+@register("ranker", "mlp")
+class MLPPointwiseRanker(_SklearnPointwiseRanker):
+    """Small MLP regressor (sklearn) — the minimal 'deep' baseline that must beat trees to justify more."""
+
+    def _make_model(self, **params: Any):  # noqa: ANN202
+        from sklearn.neural_network import MLPRegressor
+
+        defaults = {"hidden_layer_sizes": (64, 32), "alpha": 1e-3, "learning_rate_init": 1e-3, "max_iter": 300, "early_stopping": True, "random_state": self.seed}
+        defaults.update(params)
+        return MLPRegressor(**defaults)

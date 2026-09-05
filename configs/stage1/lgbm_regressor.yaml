@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_lgbm_regressor
+stage1:
+  ranker: {name: lgbm_regressor, params: {num_rounds: 400, candidates_per_query: 30}}

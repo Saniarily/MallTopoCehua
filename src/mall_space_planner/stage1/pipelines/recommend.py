@@ -49,7 +49,8 @@ class Stage1Pipeline:
             query_cols=db.query_cols,
             metric_cols=db.metric_cols,
             graph_metric_cols=db.graph_metric_cols,
-            **{k: v for k, v in feat_cfg.items() if k in FeatureSpec.__dataclass_fields__ and k not in ("query_cols", "metric_cols", "graph_metric_cols")},
+            extra_metric_cols=db.extra_metric_cols,
+            **{k: v for k, v in feat_cfg.items() if k in FeatureSpec.__dataclass_fields__ and k not in ("query_cols", "metric_cols", "graph_metric_cols", "extra_metric_cols")},
         )
         self.features = TabularFeatureBuilder(spec)
         self.ctx = RankingContext(db=db, features=self.features, config=config)

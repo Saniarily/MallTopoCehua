@@ -273,6 +273,7 @@ class ConstraintSet(BaseModel):
     shop_area_max: float | None = Field(None, gt=0, description="m²")
     shop_area_mean: float | None = Field(None, gt=0)
     corridor_width: float = Field(6.0, gt=0, description="Nominal corridor width in metres.")
+    shop_depth: float = Field(30.0, gt=0, description="Max depth of shop frontage band from a corridor (m).")
     min_entrances: int = Field(1, ge=0)
     num_atria: int | None = Field(None, ge=0)
     target_metrics: TopologyMetrics | None = Field(None, description="Optional target graph descriptors.")
@@ -300,7 +301,7 @@ class SpaceUnit(BaseModel):
     """A 2-D space unit produced by Stage 2 (shop, corridor segment, atrium, entrance)."""
 
     unit_id: str
-    kind: Literal["shop", "corridor", "junction", "atrium", "entrance"]
+    kind: Literal["shop", "anchor", "corridor", "junction", "atrium", "entrance"]
     polygon: list[tuple[float, float]] | None = None
     centroid: tuple[float, float] | None = None
     area: float | None = None

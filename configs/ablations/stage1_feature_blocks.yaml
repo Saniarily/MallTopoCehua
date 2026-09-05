@@ -1,8 +1,11 @@
-# Single-factor ablation over feature blocks (Phase 2 will run this via scripts/run_ablation.py)
-base_config: configs/stage1/random_forest.yaml
+# Single-factor feature-block ablation on the LambdaMART ranker, 3 seeds.
+base_config: configs/stage1/lgbm_lambdarank.yaml
 seeds: [42, 43, 44]
 factors:
+  - {name: full, overrides: {}}
   - {name: no_condition, overrides: {features.use_condition: false}}
-  - {name: no_prototype_metrics, overrides: {features.use_prototype_metrics: false}}
+  - {name: no_legacy_metrics, overrides: {features.use_prototype_metrics: false}}
   - {name: no_graph_metrics, overrides: {features.use_graph_metrics: false}}
+  - {name: no_extra_metrics, overrides: {features.use_extra_metrics: false}}
   - {name: no_match, overrides: {features.use_match: false}}
+  - {name: no_retriever, overrides: {stage1.retriever: null}}

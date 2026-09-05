@@ -2,10 +2,12 @@ seed: 0
 experiment_name: stage2_rule_baseline
 stage2:
   generator: {name: rule_expander, params: {label_style: letters}}
-  geometry_decoder: {name: skeleton_embed, params: {margin_frac: 0.08}}
+  geometry_decoder: {name: corridor_partition, params: {margin_frac: 0.1, atrium_radius: 9.0, max_frontage_dist: 4.0}}
+  repairer: {name: basic, params: {drop_unreachable: true, merge_small: true}}
   evaluator:
     name: topology_spec
     params:
       thresholds: {node_deviation_pct_max: 30, edge_accuracy_pct_min: 70, density_deviation_pct_max: 40, aspl_deviation_pct_max: 35, inference_time_s_max: 60}
+  geometry_evaluator: {name: geometry, params: {min_inside_ratio: 0.98, max_overlap_rate: 0.01, min_reachable_rate: 0.9}}
 n_candidates: 3
 output_dir: outputs/generated_layouts

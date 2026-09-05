@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_mlp
+stage1:
+  ranker: {name: mlp, params: {hidden_layer_sizes: [64, 32], pairs_per_query: 15}}
