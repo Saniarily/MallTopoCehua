@@ -1,0 +1,11 @@
+# Synthetic dataset (legacy-format) for smoke tests and demos. NOT for reporting results.
+dataset:
+  adapter: synthetic
+  params:
+    out_dir: data/samples/synthetic
+    n_malls: 40
+    max_floors: 4
+    n_stage2: 120
+    seed: 0
+    split: {test_ratio: 0.15, val_ratio: 0.15, seed: 42, stratify_col: city_cluster}
+processed_dir: data/processed/synthetic

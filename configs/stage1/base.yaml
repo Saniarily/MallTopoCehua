@@ -1,0 +1,17 @@
+seed: 42
+data: {processed_dir: data/processed/synthetic}
+features:
+  use_condition: true
+  use_prototype_metrics: true
+  use_graph_metrics: true
+  use_match: true
+stage1:
+  hard_filter: {area_thresholds: [200000, 450000], min_candidates: 5, allow_relaxation: true}
+  retriever: {name: knn, params: {metric: euclidean}}
+  recall_top_n: 200
+  ranker: {name: weighted_rule, params: {w_quality: 0.6, w_similarity: 0.4}}
+  explainer: {name: template}
+  counterfactuals: {enabled: true, deltas: {total_area: 0.3, count_1km: 0.5, PCDI_2023: 0.2}}
+  candidate_splits: [train]
+eval: {split: test, ks: [5, 10, 20], binary_top_frac: 0.2, min_candidates: 5}
+output_dir: outputs/experiments/stage1

@@ -1,0 +1,20 @@
+# Real legacy data (paths copied from the legacy MallTopoRanker config.yaml). Read-only.
+# Override on another machine: --override dataset.params.main_table_csv=/path/to.csv
+dataset:
+  adapter: legacy
+  params:
+    main_table_csv: "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/DATASET_3+6类城市_with_rkn_ratios_and_topo_metrics.csv"
+    graph_dir: "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/Graph_Data/total_graph_data/total_graph_data(6005个地上层)"
+    graph_suffix_edge: "_M_simplified.csv"
+    graph_suffix_node: "_M_simplified_node_attributes.csv"
+    features:
+      id_col: floor_id
+      mall_id_col: mall_id
+      label_col: total_score
+      city_cluster_col: city_cluster
+      total_area_col: total_area
+      query_cols: [people, GDP_2023, PCDI_2023, TP_2023, mall_area_count, nearest_distance_km, count_1km, count_2km, total_area, Tx]
+      metric_cols: [L1_density, L2_diameter, L2_complexity, L2_integration]
+    split: {test_ratio: 0.1, val_ratio: 0.1, seed: 42, stratify_col: city_cluster}
+processed_dir: data/processed/legacy
+sharegpt_json: "/path/to/sharegpt_data.json"   # Stage-2 corpus (set on your machine)
