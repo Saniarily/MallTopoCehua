@@ -37,7 +37,9 @@ def test_spreadsheet_error_tokens_are_coerced(tmp_path):
     df.loc[0, "L2_integration"] = "#DIV/0!"; df.loc[1, "GDP_2023"] = "#N/A"; df.loc[2, "total_score"] = "#DIV/0!"
     df.to_csv(paths["main_table"], index=False)
     db = LegacyDatasetAdapter(str(paths["main_table"]), str(paths["graph_dir"]), split={"test_ratio": 0.2, "val_ratio": 0.2}).build()
-    assert db.manifest["coercion_report"] == {"total_score": 1, "GDP_2023": 1, "L2_integration": 1}
+    # "#N/A" is already a pandas default NA marker at read time, so only the two "#DIV/0!" cells are counted.
+    assert db.manifest["coercion_report"] == {"total_score": 1, "L2_integration": 1}
+    assert db.cases["GDP_2023"].isna().sum() >= 1
     assert pd.api.types.is_float_dtype(db.cases["L2_integration"]) and pd.api.types.is_float_dtype(db.cases["total_score"])
     from mall_space_planner.stage1.pipelines.recommend import Stage1Pipeline
     cfg = {"stage1": {"hard_filter": {"min_candidates": 2}, "ranker": {"name": "ridge", "params": {"pairs_per_query": 3}}}, "eval": {}}
