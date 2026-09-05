@@ -227,6 +227,9 @@ def audit_case_database(db: CaseDatabase) -> dict[str, Any]:
         "columns": df.columns.tolist(),
     }
     out["missing_rate"] = {c: float(df[c].isna().mean()) for c in df.columns if df[c].isna().any()}
+    out["non_numeric_tokens_coerced"] = db.manifest.get("coercion_report", {})
+    # Numeric columns that are still object dtype (would break scalers) — should be empty.
+    out["object_dtype_numeric_cols"] = [c for c in num_cols if not pd.api.types.is_numeric_dtype(df[c])]
     out["duplicates"] = {
         "duplicate_floor_ids": int(df[idc].duplicated().sum()),
         "duplicate_feature_rows": int(df[num_cols].round(6).duplicated().sum()) if num_cols else 0,

@@ -202,9 +202,40 @@ def load_graph_csv(edge_csv: Path, node_csv: Path, normalize_positions: bool = F
 
 
 # --------------------------------------------------------------------------- table
+# Spreadsheet error tokens observed in the real export (treated as missing, counted in the audit).
+NON_NUMERIC_TOKENS: tuple[str, ...] = ("#DIV/0!", "#N/A", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#NULL!", "NA", "N/A", "nan", "None", "")
+
+
+def coerce_numeric_columns(df: pd.DataFrame, cols: Iterable[str]) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Force ``cols`` to float, turning spreadsheet error strings into NaN.
+
+    Returns the frame and a per-column count of values that were non-numeric (excluding
+    genuine NaN), so that data quality issues are reported rather than silently hidden.
+    """
+    report: dict[str, int] = {}
+    for c in cols:
+        if c not in df.columns:
+            continue
+        col = df[c]
+        if pd.api.types.is_numeric_dtype(col):
+            continue
+        as_str = col.astype("string").str.strip()
+        was_present = col.notna() & ~as_str.isin(NON_NUMERIC_TOKENS[-4:])  # ignore blank-ish tokens
+        num = pd.to_numeric(as_str.replace(list(NON_NUMERIC_TOKENS), pd.NA), errors="coerce")
+        bad = int((was_present & num.isna()).sum())
+        if bad:
+            report[c] = bad
+        df[c] = num.astype(float)
+    return df, report
+
+
 def load_main_table(spec: LegacyDataSpec) -> pd.DataFrame:
-    """Load the main CSV and validate that the configured columns exist."""
-    df = pd.read_csv(spec.main_table_csv)
+    """Load the main CSV, validate configured columns and coerce numeric columns.
+
+    Non-numeric tokens such as ``#DIV/0!`` become NaN; their counts are attached to the
+    frame as ``df.attrs["coercion_report"]`` for the audit.
+    """
+    df = pd.read_csv(spec.main_table_csv, low_memory=False)
     required = [spec.id_col, spec.mall_id_col, spec.label_col, spec.city_cluster_col, *spec.query_cols, *spec.metric_cols]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -218,6 +249,11 @@ def load_main_table(spec: LegacyDataSpec) -> pd.DataFrame:
     # Standardised layout column (real table: `type8`; synthetic: `layout_type`).
     if "layout_type" not in df.columns and spec.layout_col in df.columns:
         df["layout_type"] = df[spec.layout_col].astype(str).where(df[spec.layout_col].notna(), None)
+    numeric_cols = [spec.label_col, spec.total_area_col, *spec.query_cols, *spec.metric_cols, *spec.extra_metric_cols]
+    df, report = coerce_numeric_columns(df, numeric_cols)
+    if report:
+        logger.warning("Non-numeric tokens coerced to NaN: %s", report)
+    df.attrs["coercion_report"] = report
     return df
 
 
