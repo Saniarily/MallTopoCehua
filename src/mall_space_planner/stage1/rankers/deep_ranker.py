@@ -45,14 +45,20 @@ def _torch():  # noqa: ANN202
 
 
 def select_device(prefer: str = "auto") -> Any:
+    """``auto`` -> CUDA if available else CPU.
+
+    Apple MPS is *opt-in* (``device: mps``): these models are tiny (d<=64, <=20 candidates/group) so per-kernel
+    launch overhead dominates on MPS, and a few ops are not implemented there. When MPS is requested explicitly
+    we enable the CPU fallback for unsupported ops so training never crashes.
+    """
+    import os
     torch = _torch()
+    if prefer == "mps":
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        return torch.device("mps")
     if prefer != "auto":
         return torch.device(prefer)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # --------------------------------------------------------------------------- graph tensors
@@ -131,7 +137,11 @@ def _build_modules(torch):  # noqa: ANN001, ANN202
                 h = layer(h, ei)
             mean = torch.zeros(n_graphs, h.shape[1], device=h.device).index_add_(0, batch, h)
             cnt = torch.zeros(n_graphs, 1, device=h.device).index_add_(0, batch, torch.ones(h.shape[0], 1, device=h.device)).clamp(min=1)
-            mx = torch.full((n_graphs, h.shape[1]), -1e9, device=h.device).scatter_reduce(0, batch[:, None].expand_as(h), h, reduce="amax")
+            # max-pool without scatter_reduce (not implemented on MPS): sort nodes by graph id and take
+            # the running max via a dense one-hot mask (n_nodes x n_graphs is small: <=20 candidates * ~100 nodes)
+            onehot = torch.nn.functional.one_hot(batch, n_graphs).to(h.dtype)          # [N, G]
+            masked = h[:, None, :] + (onehot[:, :, None] - 1.0) * 1e9                   # [N, G, d], -1e9 where node not in graph
+            mx = masked.amax(dim=0)                                                     # [G, d]
             return self.out(torch.cat([mean / cnt, mx], 1))
 
     class ResidualFusionRanker(nn.Module):

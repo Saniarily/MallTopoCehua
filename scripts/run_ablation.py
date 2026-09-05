@@ -20,7 +20,7 @@ from mall_space_planner.experiments.runner import run_stage1_experiment
 from mall_space_planner.utils import ProjectPaths, load_yaml, resolve_config, setup_logging
 
 def main() -> None:
-    p = base_parser("Run ablation"); p.add_argument("--out-dir", default=None); a = p.parse_args(); setup_logging(a.log_level)
+    p = base_parser("Run ablation"); p.add_argument("--out-dir", default=None); p.add_argument("--no-resume", action="store_true", help="recompute cells even if run.json exists"); a = p.parse_args(); setup_logging(a.log_level)
     ab = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S"); out = paths.resolve(a.out_dir or f"outputs/experiments/ablation_{Path(a.config).stem}_{stamp}"); out.mkdir(parents=True, exist_ok=True)
     seeds = [int(s) for s in ab.get("seeds", [42])]
@@ -37,8 +37,11 @@ def main() -> None:
         pdir = str(paths.resolve(cfg["data"]["processed_dir"])); db = db_cache.setdefault(pdir, CaseDatabase.load(pdir))
         for seed in seeds:
             rdir = out / name / f"seed_{seed}"
-            rec = run_stage1_experiment(cfg, db, rdir, seed=seed, save_checkpoint=False); rec["variant"] = cfg.get("variant", "")
-            (rdir / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            if (rdir / "run.json").exists() and not a.no_resume:  # resume: a crashed run only redoes the missing (variant, seed) cells
+                rec = json.loads((rdir / "run.json").read_text(encoding="utf-8")); print(f"[{name}][seed {seed}] cached")
+            else:
+                rec = run_stage1_experiment(cfg, db, rdir, seed=seed, save_checkpoint=False); rec["variant"] = cfg.get("variant", "")
+                (rdir / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             t = rec["metrics"].get("test", {}); print(f"[{name}][seed {seed}] test ndcg@5={t.get('ndcg@5', float('nan')):.4f} ndcg@10={t.get('ndcg@10', float('nan')):.4f} spearman={t.get('spearman', float('nan')):.4f}")
     for split in ("val", "test"):
         agg = aggregate_runs(out, split=split)

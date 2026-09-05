@@ -212,14 +212,8 @@ class ARGNNExpander(BaseTopologyGenerator):
 
     # ------------------------------------------------------------------ device/model
     def _device(self):  # noqa: ANN202
-        torch = _torch()
-        if self.device_pref != "auto":
-            return torch.device(self.device_pref)
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
+        from mall_space_planner.stage1.rankers.deep_ranker import select_device  # same policy: auto -> cuda|cpu, mps opt-in
+        return select_device(self.device_pref)
 
     def _model_or_new(self, torch):  # noqa: ANN001, ANN202
         if self._model is None:
