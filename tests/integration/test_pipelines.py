@@ -34,3 +34,11 @@ def test_fidelity_protocol_and_reference_rankers(synthetic_db):
     assert agg["n_malls"] > 0 and 0 <= agg["type_hit@5"] <= 1
     _, agg_o = evaluate_prototype_fidelity(pipe, ks=(5,), reference="oracle"); assert agg_o["type_precision@5"] >= agg["type_precision@5"] - 1e-9
     lp = layout_predictability(synthetic_db); assert "majority_accuracy" in lp
+
+@pytest.mark.parametrize("ranker", ["quality_oracle", "weighted_rule", "random", "ridge"])
+def test_runner_injects_seed_only_when_accepted(synthetic_db, tmp_path, ranker):
+    from mall_space_planner.experiments.runner import run_stage1_experiment
+    params = {"pairs_per_query": 3} if ranker == "ridge" else {}
+    cfg = {**S1, "stage1": {**S1["stage1"], "ranker": {"name": ranker, "params": params}}}
+    rec = run_stage1_experiment(cfg, synthetic_db, tmp_path / ranker, seed=7, save_checkpoint=False)
+    assert rec["seed"] == 7 and "test" in rec["metrics"]

@@ -6,6 +6,8 @@ environment snapshot so that :mod:`.aggregate` can pool runs across seeds/varian
 
 from __future__ import annotations
 
+import copy
+import inspect
 import json
 import time
 from pathlib import Path
@@ -20,13 +22,37 @@ from mall_space_planner.utils.repro import collect_environment_info, seed_everyt
 logger = get_logger(__name__)
 
 
+def _inject_seed(cfg: dict[str, Any], seed: int) -> None:
+    """Pass the run seed to the ranker only if its constructor accepts ``seed``.
+
+    Deterministic components (e.g. ``quality_oracle``, ``weighted_rule``) must not receive
+    unknown kwargs; a seed given explicitly in the config is left untouched.
+    """
+    from mall_space_planner.registry import get as registry_get
+
+    spec = cfg.get("stage1", {}).get("ranker")
+    if not isinstance(spec, dict) or "name" not in spec:
+        return
+    params = spec.setdefault("params", {}) or {}
+    spec["params"] = params
+    if "seed" in params:
+        return
+    try:
+        sig = inspect.signature(registry_get("ranker", spec["name"]).__init__)
+    except (KeyError, ValueError, TypeError):
+        return
+    accepts = "seed" in sig.parameters or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    # **kwargs rankers forward unknown params to the underlying sklearn/lightgbm model; only inject for explicit `seed`.
+    if "seed" in sig.parameters:
+        params["seed"] = seed
+    elif accepts and spec["name"].startswith("lgbm"):
+        params["seed"] = seed
+
+
 def run_stage1_experiment(cfg: dict[str, Any], db: CaseDatabase, out_dir: Path, seed: int | None = None, splits: tuple[str, ...] = ("val", "test"), save_checkpoint: bool = True) -> dict[str, Any]:
     seed = int(cfg.get("seed", 42) if seed is None else seed)
-    cfg = dict(cfg, seed=seed)
-    if "stage1" in cfg and isinstance(cfg["stage1"].get("ranker"), dict):
-        cfg["stage1"]["ranker"].setdefault("params", {})["seed"] = seed if cfg["stage1"]["ranker"]["name"] != "weighted_rule" else cfg["stage1"]["ranker"]["params"].get("seed", None)
-        if cfg["stage1"]["ranker"]["params"].get("seed") is None:
-            cfg["stage1"]["ranker"]["params"].pop("seed", None)
+    cfg = copy.deepcopy(dict(cfg, seed=seed))
+    _inject_seed(cfg, seed)
     seed_everything(seed)
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
