@@ -47,3 +47,32 @@ class WeightedRuleRanker(BaseRanker):
 
     def feature_importance(self) -> dict[str, float]:
         return {"quality_score": self.w_quality, "condition_similarity": self.w_similarity}
+
+
+@register("ranker", "random")
+class RandomRanker(BaseRanker):
+    """Lower-bound reference: uniformly random scores (seeded)."""
+
+    def __init__(self, seed: int = 0) -> None:
+        self.seed = seed
+        self._rng = np.random.RandomState(seed)
+
+    def fit(self, ctx: RankingContext, train_df: pd.DataFrame, val_df: pd.DataFrame | None = None) -> RandomRanker:
+        self._rng = np.random.RandomState(self.seed)
+        return self
+
+    def score(self, ctx: RankingContext, query_df: pd.DataFrame, cand_df: pd.DataFrame) -> np.ndarray:
+        return self._rng.rand(len(cand_df)).astype(np.float32)
+
+
+@register("ranker", "quality_oracle")
+class QualityOracleRanker(WeightedRuleRanker):
+    """Upper-bound reference: ranks purely by the candidate's own quality label.
+
+    Reads ``total_score`` of the candidate — legitimate at inference (it is a database
+    attribute of the case), but it *is* the evaluation relevance, so it is an oracle for
+    label-based protocols and must be reported as such.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(w_quality=1.0, w_similarity=0.0)

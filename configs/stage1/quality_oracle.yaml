@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: ref_quality_oracle_upper_bound
+stage1:
+  ranker: {name: quality_oracle}

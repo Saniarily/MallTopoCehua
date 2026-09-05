@@ -1,6 +1,6 @@
 """Rankers (re-ranking stage). All registered under kind ``ranker``."""
 
-from mall_space_planner.stage1.rankers.rule import WeightedRuleRanker
+from mall_space_planner.stage1.rankers.rule import QualityOracleRanker, RandomRanker, WeightedRuleRanker
 from mall_space_planner.stage1.rankers.sklearn_rankers import (
     ExtraTreesPointwiseRanker,
     LinearPointwiseRanker,
@@ -15,6 +15,8 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     "WeightedRuleRanker",
+    "RandomRanker",
+    "QualityOracleRanker",
     "ExtraTreesPointwiseRanker",
     "LinearPointwiseRanker",
     "MLPPointwiseRanker",

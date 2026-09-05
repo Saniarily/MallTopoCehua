@@ -48,8 +48,10 @@ class _LGBMBase(BaseRanker):
         seed: int = 42,
         area_thresholds: list[float] | None = None,
         early_stopping_rounds: int = 50,
+        grade_mode: str = "rank",
         **model_params: Any,
     ) -> None:
+        self.grade_mode = grade_mode
         self.candidates_per_query = candidates_per_query
         self.n_grades = n_grades
         self.seed = seed
@@ -69,8 +71,25 @@ class _LGBMBase(BaseRanker):
         if len(rel) == 0:
             return None
         x, names = ctx.features.pair_features(q_df, c_df)
-        grades = np.clip(np.round(rel * (self.n_grades - 1)), 0, self.n_grades - 1).astype(int)
+        grades = self._grades(rel, groups)
         return x, rel, grades, groups, names
+
+    def _grades(self, rel: np.ndarray, groups: list[int]) -> np.ndarray:
+        """Integer grades from *within-group rank percentiles* (robust to the ceiling-skewed label).
+
+        With ``grade_mode="value"`` the legacy min-max value binning is used instead
+        (kept for ablation: on the real data most candidates collapse into the top bins).
+        """
+        if self.grade_mode == "value":
+            return np.clip(np.round(rel * (self.n_grades - 1)), 0, self.n_grades - 1).astype(int)
+        out = np.zeros(len(rel), dtype=int)
+        start = 0
+        for g in groups:
+            r = rel[start : start + g]
+            ranks = pd.Series(r).rank(method="average", pct=True).to_numpy()  # ties share a percentile
+            out[start : start + g] = np.clip(np.ceil(ranks * self.n_grades) - 1, 0, self.n_grades - 1).astype(int)
+            start += g
+        return out
 
     def _make_params(self, objective: str) -> dict[str, Any]:
         p = {
