@@ -1,0 +1,4 @@
+_base_: lgbm_lambdarank.yaml
+experiment_name: stage1_lgbm_lambdarank_valuegrade
+stage1:
+  ranker: {name: lgbm_lambdarank, params: {grade_mode: value, n_grades: 5}}

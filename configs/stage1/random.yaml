@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: ref_random_lower_bound
+stage1:
+  ranker: {name: random}

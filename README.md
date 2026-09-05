@@ -32,13 +32,18 @@ python scripts/evaluate_stage2.py --config configs/stage2/search_baseline.yaml -
 # 端到端：策划条件 JSON → Top-K → 选择第 k 个原型 → 场地约束生成 → 导出
 python scripts/run_e2e.py --condition data/samples/query_example.json --pick 1 --width 180 --height 120 \
     --target-nodes 40 --target-shops 50 --shop-area 60 300
-# 真实数据一键跑完 Phase 2/3 全部实验（Mac）
+# 原型保真度协议（label-free）+ 条件→布局类型可预测性
+python scripts/evaluate_fidelity.py --config configs/stage1/ridge.yaml --configs configs/stage1/lgbm_lambdarank.yaml
+# 真实数据一键跑完当前轮全部实验（Mac）
 bash scripts/run_real_data_phase2.sh
 ```
 
 ## 目录
 `configs/` 数据/阶段/消融配置 · `src/mall_space_planner/` {schemas, data, features, topology, geometry, stage1, stage2, evaluation, registry, utils} ·
 `scripts/` CLI · `tests/` unit+smoke · `docs/` 审计/Schema/架构 · `data/samples/` 合成样例（自动生成）。
+
+## 机器相关路径
+复制 `configs/data/legacy.local.yaml.example` → `legacy.local.yaml`（git 忽略）填写本机路径；任何 `<cfg>.local.yaml` 都会自动覆盖同名配置。
 
 ## 状态（Phase 0–3 完成）
 - ✅ 审计 / Schema / registry / 适配器（含真实 97 列表的 18 个额外拓扑列与 `type8` 布局类型）/ 无泄漏划分

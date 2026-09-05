@@ -1,10 +1,13 @@
 # Traditional vs LTR vs MLP under an identical protocol, 3 seeds.
 seeds: [42, 43, 44]
 compare_configs:
+  - configs/stage1/random.yaml
+  - configs/stage1/quality_oracle.yaml
   - configs/stage1/rule_knn.yaml
   - configs/stage1/ridge.yaml
   - configs/stage1/random_forest.yaml
   - configs/stage1/extra_trees.yaml
   - configs/stage1/lgbm_regressor.yaml
   - configs/stage1/lgbm_lambdarank.yaml
+  - configs/stage1/lgbm_lambdarank_valuegrade.yaml
   - configs/stage1/mlp.yaml

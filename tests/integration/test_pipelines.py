@@ -24,3 +24,13 @@ def test_end_to_end_service(synthetic_db, tmp_path):
     assert len(results) == 2 and all(r.metrics["topo_edge_accuracy_pct"] == 100 for _, r in results)
     files = svc.export(results[0][0], tmp_path, stem="c0"); assert {"json", "geojson", "svg", "png"} <= set(files) and all(p.exists() for p in files.values())
     geo = json.loads(files["geojson"].read_text()); assert any(f["properties"]["kind"] == "shop" for f in geo["features"])
+
+def test_fidelity_protocol_and_reference_rankers(synthetic_db):
+    from mall_space_planner.evaluation.prototype_fidelity import evaluate_prototype_fidelity, layout_predictability
+    for name in ("random", "quality_oracle"):
+        pipe = Stage1Pipeline({**S1, "stage1": {**S1["stage1"], "ranker": {"name": name}}}, synthetic_db).fit()
+        assert pipe.recommend(Q, top_k=3, with_explanations=False)
+    per_mall, agg = evaluate_prototype_fidelity(pipe, ks=(5,), reference=None)
+    assert agg["n_malls"] > 0 and 0 <= agg["type_hit@5"] <= 1
+    _, agg_o = evaluate_prototype_fidelity(pipe, ks=(5,), reference="oracle"); assert agg_o["type_precision@5"] >= agg["type_precision@5"] - 1e-9
+    lp = layout_predictability(synthetic_db); assert "majority_accuracy" in lp

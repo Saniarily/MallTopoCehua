@@ -108,6 +108,12 @@ def resolve_config(
             merged = deep_update(merged, resolve_config(b_path, None, _seen))
     merged = deep_update(merged, raw)
 
+    # Machine-local overrides: ``<name>.local.yaml`` next to the config (git-ignored).
+    local = path.with_name(f"{path.stem}.local.yaml")
+    if local.exists() and local != path:
+        merged = deep_update(merged, load_yaml(local))
+        merged.setdefault("_meta", {})["local_override"] = str(local)
+
     if overrides:
         if isinstance(overrides, dict):
             merged = deep_update(merged, overrides)

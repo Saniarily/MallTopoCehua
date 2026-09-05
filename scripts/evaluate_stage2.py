@@ -27,7 +27,7 @@ def main() -> None:
         t0 = time.perf_counter(); g = gen.generate(req, a.seed); dt = time.perf_counter() - t0
         r = ev.evaluate(s.skeleton, g, n_t, inference_time_s=dt, target=s.target)
         rows.append({"sample_id": s.sample_id, "layout": s.layout_type.value if s.layout_type else None, "n_skeleton": s.skeleton.num_nodes, "n_target": n_t, "overall_pass": r.overall_pass, **{k: v for k, v in r.metrics.items()}, **{f"pass_{k}": v for k, v in r.passed.items()}})
-    df = pd.DataFrame(rows); name = cfg.get("experiment_name", "stage2"); out = paths.resolve(cfg.get("output_dir", "outputs/experiments")) / "stage2_eval" / name; out.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows); name = cfg.get("experiment_name", "stage2"); out = paths.resolve(cfg.get("eval_output_dir", "outputs/experiments/stage2_eval")) / name; out.mkdir(parents=True, exist_ok=True)
     df.to_csv(out / "per_sample.csv", index=False)
     num = df.select_dtypes(include=[np.number, bool]); agg = {"n_samples": int(len(df)), "generator": cfg["stage2"]["generator"]["name"], **{c: float(num[c].mean()) for c in num.columns}}
     agg["by_layout"] = df.groupby("layout")[["overall_pass", "node_deviation_pct", "density_deviation_pct", "aspl_deviation_pct"]].mean().round(3).to_dict("index")

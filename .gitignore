@@ -39,3 +39,6 @@ mlruns/
 
 # Notebooks checkpoints
 .ipynb_checkpoints/
+
+# Machine-local config overrides (paths etc.)
+configs/**/*.local.yaml

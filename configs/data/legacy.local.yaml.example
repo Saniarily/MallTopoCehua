@@ -1,0 +1,6 @@
+# Copy to legacy.local.yaml (git-ignored) and set machine-specific paths. Overrides legacy.yaml.
+dataset:
+  params:
+    main_table_csv: "/path/to/DATASET_3+6类城市_with_rkn_ratios_and_topo_metrics.csv"
+    graph_dir: "/path/to/total_graph_data(6005个地上层)"
+sharegpt_json: "/path/to/sharegpt_data.json"
