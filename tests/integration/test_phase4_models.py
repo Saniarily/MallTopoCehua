@@ -124,6 +124,19 @@ def test_gin_readout_maxpool_matches_scatter_reduce_and_device_policy():
     from mall_space_planner.stage1.rankers.deep_ranker import select_device
     g = torch.Generator().manual_seed(0); h = torch.randn(37, 8, generator=g); batch = torch.randint(0, 5, (37,), generator=g); batch[:5] = torch.arange(5)
     ref = torch.full((5, 8), -1e9).scatter_reduce(0, batch[:, None].expand_as(h), h, reduce="amax")
-    onehot = torch.nn.functional.one_hot(batch, 5).to(h.dtype); ours = (h[:, None, :] + (onehot[:, :, None] - 1.0) * 1e9).amax(dim=0)
-    assert torch.allclose(ref, ours)
+    from mall_space_planner.stage1.rankers.deep_ranker import segment_max
+    assert torch.allclose(ref, segment_max(h, batch, 5))
+    # unsorted / non-contiguous graph ids and an empty graph slot must work; memory stays O(G * max_nodes * d)
+    big_h = torch.randn(60_000, 48); big_b = torch.randint(0, 640, (60_000,)); big_b[big_b == 7] = 8
+    out = segment_max(big_h, big_b, 640); assert out.shape == (640, 48) and torch.all(out[7] == 0)
+    ref_big = torch.full((640, 48), -1e9).scatter_reduce(0, big_b[:, None].expand_as(big_h), big_h, reduce="amax"); ref_big[7] = 0
+    assert torch.allclose(ref_big, out)
     assert select_device("auto").type in {"cpu", "cuda"} and select_device("cpu").type == "cpu"
+
+
+def test_listwise_ce_vectorised_matches_loop():
+    torch = pytest.importorskip("torch")
+    from mall_space_planner.stage1.rankers.deep_ranker import listwise_softmax_ce
+    g = torch.Generator().manual_seed(1); s = torch.randn(50, generator=g); r = torch.rand(50, generator=g) * 4; grp = torch.randint(0, 4, (50,), generator=g); grp[:4] = torch.arange(4)
+    ref = sum(-(torch.softmax(r[grp == k], 0) * torch.log_softmax(s[grp == k], 0)).sum() for k in range(4)) / 4
+    assert torch.allclose(ref, listwise_softmax_ce(s, r, grp, 4), atol=1e-5)

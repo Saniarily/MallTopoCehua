@@ -61,6 +61,41 @@ def select_device(prefer: str = "auto") -> Any:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def segment_max(h: Any, batch: Any, n_graphs: int) -> Any:
+    """Per-graph max pooling ``[N, d] -> [G, d]`` using only sort / cumsum / index_put / amax.
+
+    ``scatter_reduce`` is not implemented on Apple MPS, and a dense ``[N, G, d]`` one-hot trick is O(N*G*d)
+    memory (several GB for a 32-group batch). Here nodes are padded into ``[G, max_nodes, d]`` (O(G*max_n*d)).
+    """
+    torch = _torch()
+    if h.shape[0] == 0:
+        return torch.zeros(n_graphs, h.shape[1], device=h.device, dtype=h.dtype)
+    sorted_batch, order = torch.sort(batch, stable=True)
+    counts = torch.zeros(n_graphs, dtype=torch.long, device=h.device).index_add_(0, batch, torch.ones_like(batch))
+    starts = torch.cumsum(counts, 0) - counts
+    pos = torch.arange(h.shape[0], device=h.device) - starts[sorted_batch]
+    dense = torch.full((n_graphs, int(counts.max().item()), h.shape[1]), -1e9, device=h.device, dtype=h.dtype)
+    dense[sorted_batch, pos] = h[order]
+    mx = dense.amax(dim=1)
+    return torch.where(counts[:, None] > 0, mx, torch.zeros_like(mx))  # empty graphs -> 0 instead of -1e9
+
+
+def listwise_softmax_ce(scores: Any, rel_logits: Any, group: Any, n_groups: int) -> Any:
+    """Mean over groups of CE(softmax(rel_logits), softmax(scores)) without a Python loop over groups."""
+    torch = _torch()
+    sorted_g, order = torch.sort(group, stable=True)
+    counts = torch.zeros(n_groups, dtype=torch.long, device=scores.device).index_add_(0, group, torch.ones_like(group))
+    starts = torch.cumsum(counts, 0) - counts
+    pos = torch.arange(scores.shape[0], device=scores.device) - starts[sorted_g]
+    L = int(counts.max().item())
+    pad_s = torch.full((n_groups, L), -1e9, device=scores.device, dtype=scores.dtype)
+    pad_r = torch.full((n_groups, L), -1e9, device=scores.device, dtype=scores.dtype)
+    pad_s[sorted_g, pos] = scores[order]
+    pad_r[sorted_g, pos] = rel_logits[order]
+    target = torch.softmax(pad_r, 1)
+    return -(target * torch.log_softmax(pad_s, 1)).sum(1).mean()
+
+
 # --------------------------------------------------------------------------- graph tensors
 NODE_FEAT_DIM = 5
 
@@ -137,11 +172,7 @@ def _build_modules(torch):  # noqa: ANN001, ANN202
                 h = layer(h, ei)
             mean = torch.zeros(n_graphs, h.shape[1], device=h.device).index_add_(0, batch, h)
             cnt = torch.zeros(n_graphs, 1, device=h.device).index_add_(0, batch, torch.ones(h.shape[0], 1, device=h.device)).clamp(min=1)
-            # max-pool without scatter_reduce (not implemented on MPS): sort nodes by graph id and take
-            # the running max via a dense one-hot mask (n_nodes x n_graphs is small: <=20 candidates * ~100 nodes)
-            onehot = torch.nn.functional.one_hot(batch, n_graphs).to(h.dtype)          # [N, G]
-            masked = h[:, None, :] + (onehot[:, :, None] - 1.0) * 1e9                   # [N, G, d], -1e9 where node not in graph
-            mx = masked.amax(dim=0)                                                     # [G, d]
+            mx = segment_max(h, batch, n_graphs)
             return self.out(torch.cat([mean / cnt, mx], 1))
 
     class ResidualFusionRanker(nn.Module):
@@ -284,13 +315,8 @@ class DeepResidualRanker(BaseRanker):
                 row_to_local[rows_t] = torch.arange(len(rows), device=device)
                 sub_batch = row_to_local[gb[node_idx]]
                 s = model(qn, p[rows_t], s_tab[rows_t], gx[node_idx], sub_ei, sub_batch, len(rows))
-                # listwise softmax cross-entropy per group
-                loss = 0.0
-                for k in range(len(sel)):
-                    m = gmask == k
-                    target = torch.softmax(rel_t[rows_t][m] * 4.0, 0)
-                    loss = loss + -(target * torch.log_softmax(s[m], 0)).sum()
-                loss = loss / len(sel)
+                # listwise softmax cross-entropy per group, vectorised via padding to [n_groups, max_len]
+                loss = listwise_softmax_ce(s, rel_t[rows_t] * 4.0, gmask, len(sel))
                 opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -301,6 +327,7 @@ class DeepResidualRanker(BaseRanker):
             v = self._val_ndcg(model, val_pack, torch) if val_pack else -float(np.mean(losses))
             self.history_["val_ndcg10"].append(v)
             snapshots.append((v, {k: t.detach().cpu().clone() for k, t in model.state_dict().items()}))
+            logger.info("DeepResidualRanker epoch %d/%d: loss=%.4f val_ndcg10=%.4f alpha=%.3f", ep + 1, self.epochs, self.history_["train_loss"][-1], v, float(model.alpha.detach()) if hasattr(model, "alpha") else float("nan"))
             if v > best + 1e-4:
                 best, bad = v, 0
             else:
