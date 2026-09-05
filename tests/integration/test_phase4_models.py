@@ -116,3 +116,14 @@ def test_ar_gnn_best_of_reranking_respects_target(tmp_path):
     s = samples[-1]; n_t = s.target_num_nodes or s.target.num_nodes
     req = GenerationRequest(prototype=TopologyPrototype(prototype_id=s.sample_id, graph=s.skeleton, layout_type=s.layout_type), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t, layout_type=s.layout_type), seed=0)
     g = gen.generate(req, seed=0); assert g.num_nodes == n_t
+
+
+def test_gin_readout_maxpool_matches_scatter_reduce_and_device_policy():
+    """MPS lacks scatter_reduce; the dense one-hot max-pool must equal it exactly, and `auto` must never pick MPS."""
+    torch = pytest.importorskip("torch")
+    from mall_space_planner.stage1.rankers.deep_ranker import select_device
+    g = torch.Generator().manual_seed(0); h = torch.randn(37, 8, generator=g); batch = torch.randint(0, 5, (37,), generator=g); batch[:5] = torch.arange(5)
+    ref = torch.full((5, 8), -1e9).scatter_reduce(0, batch[:, None].expand_as(h), h, reduce="amax")
+    onehot = torch.nn.functional.one_hot(batch, 5).to(h.dtype); ours = (h[:, None, :] + (onehot[:, :, None] - 1.0) * 1e9).amax(dim=0)
+    assert torch.allclose(ref, ours)
+    assert select_device("auto").type in {"cpu", "cuda"} and select_device("cpu").type == "cpu"

@@ -4,10 +4,9 @@
 #   CORPUS=/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/MallTopoCehua/sharegpt_data.json \
 #   bash scripts/run_real_data_phase4.sh
 #
-# Optional env: SEEDS_S1="42 43 44" (stage-1 multi-seed runs), S2_LIMIT=600 (stage-2 holdout size to evaluate),
-#               DEVICE=mps|cpu for the AR-GNN (stage-1 deep ranker uses configs/stage1/deep_residual.yaml `device: auto`
-#               -> MPS on Apple silicon; put `stage1: {ranker: {params: {device: cpu}}}` in deep_residual.local.yaml to force CPU),
-#               SKIP_S1=1 / SKIP_S2=1.
+# Optional env: S2_LIMIT=600 (stage-2 holdout size to evaluate), DEVICE=auto|cpu|mps for the AR-GNN
+#               (auto = CUDA else CPU; MPS is opt-in and enables the CPU fallback for unsupported ops),
+#               SKIP_S1=1 / SKIP_S2=1. run_ablation resumes: already-finished (variant, seed) cells are reused.
 # Everything is written under outputs/experiments/*_r3 so round-2 results stay untouched.
 set -euo pipefail
 cd "$(dirname "$0")/.."
