@@ -23,13 +23,19 @@ def main() -> None:
     p.add_argument("--pick", type=int, default=1, help="1-based rank of the prototype to expand"); p.add_argument("--boundary", default=None, help="JSON file with SiteBoundary; default rectangle")
     p.add_argument("--width", type=float, default=180); p.add_argument("--height", type=float, default=120)
     p.add_argument("--target-nodes", type=int, default=None); p.add_argument("--target-shops", type=int, default=None); p.add_argument("--shop-area", type=float, nargs=2, default=None); p.add_argument("--atria", type=int, default=None)
-    p.add_argument("--n-candidates", type=int, default=3); p.add_argument("--seed", type=int, default=0); p.add_argument("--out", default="outputs/generated_layouts/e2e"); p.add_argument("--override", nargs="*", default=[])
+    p.add_argument("--use-top-type", action="store_true", help="restrict case retrieval to the top recommended layout type"); p.add_argument("--n-candidates", type=int, default=3); p.add_argument("--seed", type=int, default=0); p.add_argument("--out", default="outputs/generated_layouts/e2e"); p.add_argument("--override", nargs="*", default=[])
     a = p.parse_args(); setup_logging("INFO"); paths = ProjectPaths(root=ROOT)
     c1 = resolve_config(paths.resolve(a.stage1_config), a.override); c2 = resolve_config(paths.resolve(a.stage2_config))
     db = CaseDatabase.load(paths.resolve(c1["data"]["processed_dir"]))
     svc = PlanningService(db, c1, c2, checkpoint_dir=paths.resolve(a.checkpoint) if a.checkpoint else None)
     cond = PlanningCondition(**json.loads(Path(a.condition).read_text(encoding="utf-8")))
-    recs = svc.recommend(cond, top_k=a.top_k)
+    tr = svc.recommend_types(cond)
+    if tr:
+        print("\n=== Layout-type decision support: E[score | conditions, type] ===")
+        for t in tr.recommendations:
+            print(f"#{t.rank} {t.layout_type:6s} expected={t.expected_score:.3f} [{t.ci_low:.2f},{t.ci_high:.2f}] comparable_cases={t.n_comparable_cases} empirical_mean={t.empirical_mean_score if t.empirical_mean_score is None else round(t.empirical_mean_score, 3)}")
+        (out := paths.resolve(a.out)).mkdir(parents=True, exist_ok=True); (out / "type_recommendation.json").write_text(json.dumps([t.__dict__ for t in tr.recommendations], ensure_ascii=False, indent=2), encoding="utf-8")
+    recs = svc.recommend_within_type(cond, tr.recommendations[0].layout_type, top_k=a.top_k) if (tr and a.use_top_type) else svc.recommend(cond, top_k=a.top_k)
     out = paths.resolve(a.out); out.mkdir(parents=True, exist_ok=True); svc.recommendations_to_json(recs, out / "recommendations.json")
     print(f"\n=== Stage 1: Top-{len(recs)} prototypes ===")
     for r in recs:

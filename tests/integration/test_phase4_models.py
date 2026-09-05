@@ -1,0 +1,118 @@
+"""Phase 4 components: type-conditional quality model, deep residual ranker, AR-GNN generator.
+
+All tests run on the synthetic fixture only (seconds, CPU). They check *mechanics* (fit/predict/save/load/
+schema contracts), never accuracy - real-data numbers come from the round-3 scripts on the user's machine.
+"""
+from __future__ import annotations
+import numpy as np
+import pytest
+from mall_space_planner.api.service import PlanningService
+from mall_space_planner.schemas import ConstraintSet, PlanningCondition, SiteBoundary, TopologyPrototype
+from mall_space_planner.stage1.pipelines.recommend import Stage1Pipeline
+
+S1 = {"seed": 1, "stage1": {"hard_filter": {"min_candidates": 3}, "retriever": {"name": "knn"}, "recall_top_n": 50, "explainer": {"name": "template"}, "counterfactuals": {"enabled": False},
+                            "type_recommender": {"enabled": True, "n_estimators": 30, "min_samples_leaf": 3, "n_bootstrap": 4}}, "eval": {"min_candidates": 3}}
+S2 = {"stage2": {"generator": {"name": "rule_expander"}, "geometry_decoder": {"name": "corridor_partition"}, "repairer": {"name": "basic"}}}
+Q = PlanningCondition(city_cluster=2, people=8000, GDP_2023=50000, PCDI_2023=55000, TP_2023=5000, mall_area_count=90, nearest_distance_km=0.3, count_1km=8, count_2km=20, total_area=150000, Tx=25)
+
+
+# ---------------------------------------------------------------- type recommender: E[score | conditions, type]
+def test_type_recommender_ranks_all_types_with_ci(synthetic_db):
+    from mall_space_planner.stage1.type_recommender import TreeTypeRecommender, evaluate_type_recommender
+    rec = TreeTypeRecommender(n_estimators=30, min_samples_leaf=3, n_bootstrap=4, seed=1).fit(synthetic_db, synthetic_db.split("train"))
+    res = rec.recommend(synthetic_db, Q)
+    assert res.recommendations, "must return at least one layout type"
+    ranks = [r.rank for r in res.recommendations]; assert ranks == list(range(1, len(ranks) + 1))
+    exp = [r.expected_score for r in res.recommendations]; assert exp == sorted(exp, reverse=True)
+    for r in res.recommendations:
+        assert r.ci_low <= r.expected_score <= r.ci_high
+        assert 0 <= r.share_in_comparable <= 1 and r.n_comparable_cases >= 0
+    assert np.isfinite(res.conditions_only_score)
+    ev = evaluate_type_recommender(rec, synthetic_db, "test")
+    for k in ("rmse_with_type", "rmse_conditions_only", "spearman_with_type", "spearman_conditions_only", "per_cluster", "best_type_agreement_rate", "policy_uplift"):
+        assert k in ev, k
+
+
+def test_service_type_then_within_type_flow(synthetic_db):
+    svc = PlanningService(synthetic_db, {**S1, "stage1": {**S1["stage1"], "ranker": {"name": "ridge", "params": {"pairs_per_query": 3}}}}, S2)
+    types = svc.recommend_types(Q); assert types.recommendations
+    top = types.recommendations[0].layout_type
+    recs = svc.recommend_within_type(Q, top, top_k=3); assert recs
+    # every retrieved prototype must be of the user-selected type (hard filter is strict once the type exists)
+    assert all(str(getattr(r.layout_type, "value", r.layout_type)) == str(getattr(top, "value", top)) for r in recs), [r.layout_type for r in recs]
+
+
+# ---------------------------------------------------------------- deep residual Transformer+GNN ranker
+@pytest.mark.parametrize("variant", [dict(use_transformer=True, use_gnn=True), dict(use_transformer=False, use_gnn=True), dict(use_transformer=True, use_gnn=False)])
+def test_deep_residual_ranker_fits_and_stays_residual(synthetic_db, variant):
+    pytest.importorskip("torch")
+    params = {"d_model": 16, "epochs": 3, "patience": 2, "ensemble_k": 1, "candidates_per_query": 6, "batch_groups": 4, "device": "cpu", "base_ranker": "ridge", **variant}
+    cfg = {**S1, "stage1": {**S1["stage1"], "ranker": {"name": "deep_residual", "params": params}}}
+    pipe = Stage1Pipeline(cfg, synthetic_db).fit(); recs = pipe.recommend(Q, top_k=5, with_explanations=False)
+    assert len(recs) == 5 and all(np.isfinite(r.score) for r in recs)
+    scores = [r.score for r in recs]; assert scores == sorted(scores, reverse=True)
+    imp = pipe.ranker.feature_importance(); assert isinstance(imp, dict) and imp
+
+
+def test_deep_residual_ranker_is_picklable_without_torch_state(synthetic_db, tmp_path):
+    pytest.importorskip("torch"); import joblib
+    from mall_space_planner.registry import build
+    r = build("ranker", {"name": "deep_residual", "params": {"d_model": 16, "epochs": 2, "ensemble_k": 1, "candidates_per_query": 6, "device": "cpu", "base_ranker": "ridge"}})
+    assert r.__getstate__()["_model"] is None
+    joblib.dump(r, tmp_path / "r.joblib"); assert (tmp_path / "r.joblib").exists()
+
+
+# ---------------------------------------------------------------- AR-GNN autoregressive expander
+def _synthetic_expansion_samples(n: int = 24, seed: int = 0):
+    """Build skeleton->target pairs from the synthetic sharegpt sample or, failing that, from stage-2 DB samples."""
+    from mall_space_planner.data.sharegpt_adapter import load_sharegpt
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "data/samples/synthetic/sharegpt_sample.json"
+    if p.exists():
+        return load_sharegpt(p, limit=n)
+    pytest.skip("synthetic sharegpt sample not present")
+
+
+def test_ar_gnn_teacher_steps_are_consistent():
+    pytest.importorskip("torch")
+    from mall_space_planner.stage2.generators.ar_gnn import canonical_order, teacher_steps
+    s = _synthetic_expansion_samples(3)[0]
+    order = canonical_order(s.skeleton, s.target)
+    assert set(order) == set(s.target.nodes) - set(s.skeleton.nodes)
+    steps = teacher_steps(s.skeleton, s.target); assert len(steps) == len(order)
+    present, edges, anchor, second = steps[0]
+    assert anchor in present and (second is None or second in present)
+
+
+def test_ar_gnn_fit_generate_save_load_and_evaluate(tmp_path):
+    torch = pytest.importorskip("torch")
+    from mall_space_planner.evaluation.stage2_eval import TopologySpecEvaluator
+    from mall_space_planner.stage2.base import GenerationRequest
+    from mall_space_planner.stage2.generators.ar_gnn import ARGNNExpander
+    samples = _synthetic_expansion_samples(24)
+    gen = ARGNNExpander(d_model=16, n_layers=1, epochs=2, patience=2, ensemble_k=1, device="cpu", seed=1).fit(samples[:20])
+    assert gen.history_ and all(np.isfinite(v[-1]) for v in gen.history_.values() if v)
+    out = gen.save(tmp_path / "ckpt"); assert (out / "ar_gnn.pt").exists() and (out / "meta.json").exists()
+    gen2 = ARGNNExpander(checkpoint=str(out), device="cpu")
+    s = samples[-1]; n_t = s.target_num_nodes or s.target.num_nodes
+    req = GenerationRequest(prototype=TopologyPrototype(prototype_id=s.sample_id, graph=s.skeleton, layout_type=s.layout_type), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t, layout_type=s.layout_type), seed=3)
+    g = gen2.generate(req, seed=3)
+    # prototype preservation: all skeleton nodes & edges survive; node count hits the target
+    assert set(s.skeleton.nodes) <= set(g.nodes)
+    assert set(s.skeleton.edges()) <= set(g.edges())
+    assert g.num_nodes == n_t
+    r = TopologySpecEvaluator().evaluate(s.skeleton, g, n_t, inference_time_s=0.1, target=s.target)
+    assert r.metrics["edge_accuracy_pct"] == 100 and "target_edge_recall_pct" in r.metrics
+    # determinism under fixed seed
+    g_b = gen2.generate(req, seed=3); assert g_b.edges() == g.edges()
+
+
+def test_ar_gnn_best_of_reranking_respects_target(tmp_path):
+    pytest.importorskip("torch")
+    from mall_space_planner.stage2.base import GenerationRequest
+    from mall_space_planner.stage2.generators.ar_gnn import ARGNNExpander
+    samples = _synthetic_expansion_samples(12)
+    gen = ARGNNExpander(d_model=16, n_layers=1, epochs=1, ensemble_k=1, device="cpu", seed=2, best_of=4).fit(samples[:10])
+    s = samples[-1]; n_t = s.target_num_nodes or s.target.num_nodes
+    req = GenerationRequest(prototype=TopologyPrototype(prototype_id=s.sample_id, graph=s.skeleton, layout_type=s.layout_type), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t, layout_type=s.layout_type), seed=0)
+    g = gen.generate(req, seed=0); assert g.num_nodes == n_t

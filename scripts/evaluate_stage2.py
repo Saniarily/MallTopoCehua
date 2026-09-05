@@ -19,7 +19,10 @@ from mall_space_planner.utils import ProjectPaths, resolve_config, setup_logging
 def main() -> None:
     p = base_parser("Evaluate stage 2 on skeleton→topology corpus"); p.add_argument("--corpus", default="data/samples/synthetic/sharegpt_sample.json"); p.add_argument("--limit", type=int, default=200); p.add_argument("--seed", type=int, default=0)
     a = p.parse_args(); setup_logging(a.log_level); cfg = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT)
-    samples = load_sharegpt(paths.resolve(a.corpus), limit=a.limit); gen = build("generator", cfg["stage2"]["generator"]); ev: TopologySpecEvaluator = build("evaluator", cfg["stage2"].get("evaluator", {"name": "topology_spec"}))
+    corpus = a.corpus if a.corpus != p.get_default("corpus") else cfg.get("corpus", a.corpus)
+    all_samples = load_sharegpt(paths.resolve(corpus)); hold = int(cfg.get("eval_holdout", 0))
+    samples = (all_samples[-hold:] if hold else all_samples)[: a.limit]  # evaluation set = held-out tail (never used for training)
+    gen = build("generator", cfg["stage2"]["generator"]); ev: TopologySpecEvaluator = build("evaluator", cfg["stage2"].get("evaluator", {"name": "topology_spec"}))
     rows = []
     for s in samples:
         n_t = s.target_num_nodes or s.target.num_nodes

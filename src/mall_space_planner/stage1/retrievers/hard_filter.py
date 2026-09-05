@@ -60,12 +60,14 @@ class HardConstraintFilter:
         q_bin = area_bin(query.total_area, self.area_thresholds)
 
         if query.preferred_layout is not None and self.layout_col in cand:
-            sub = cand[cand[self.layout_col] == query.preferred_layout.value]
-            if len(sub) >= self.min_candidates or not self.allow_relaxation:
-                cand = sub
+            sub = cand[cand[self.layout_col].astype(str) == query.preferred_layout.value]
+            if len(sub) > 0:
+                cand = sub  # user's design decision: enforced whenever any case exists
                 res.applied.append(f"{self.layout_col}=={query.preferred_layout.value}")
+                if len(sub) < self.min_candidates:
+                    res.relaxed.append(f"only {len(sub)} cases of type {query.preferred_layout.value}; other constraints may be relaxed")
             else:
-                res.relaxed.append(f"{self.layout_col} preference dropped (only {len(sub)} candidates)")
+                res.relaxed.append(f"{self.layout_col} preference dropped (no cases of that type)")
 
         if self.use_city_cluster and query.city_cluster is not None and self.city_cluster_col in cand:
             sub = cand[cand[self.city_cluster_col] == query.city_cluster]

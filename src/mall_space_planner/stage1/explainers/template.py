@@ -111,10 +111,19 @@ class TemplateExplainer(BaseExplainer):
                 risks.append(f"案例质量评分仅位于第 {pct_q:.0f} 百分位")
 
         conf = ev.get("confidence")
+        # framing: "quality-aware comparable case within the (user-)selected layout type"
+        lt = row.get("layout_type")
+        lt_txt = "" if lt is None or pd.isna(lt) else f"，布局类型「{lt}」"
+        pref = getattr(query, "preferred_layout", None)
+        type_txt = f"（已按所选类型「{getattr(pref, 'value', pref)}」限定检索范围）" if pref is not None else ""
+        qual_txt = ""
+        if qs is not None and not pd.isna(qs) and ctx.db.label_col in pool:
+            pct_q = float((pool[ctx.db.label_col] < qs).mean() * 100)
+            qual_txt = f"该案例评分 {float(qs):.2f}，位于同条件可比案例的第 {pct_q:.0f} 百分位。"
         summary = (
-            f"推荐原型 {row[ctx.db.id_col]}（第 {rank_index + 1} 名，分数 {float(row['score']):.3f}）。"
-            f"满足约束：{'、'.join(applied) if applied else '无硬约束'}。"
-            f"与输入条件最接近的因素：{'、'.join(x['label'] for x in closest)}。"
+            f"可比案例 {row[ctx.db.id_col]}{lt_txt}（第 {rank_index + 1} 名，模型分数 {float(row['score']):.3f}）{type_txt}。"
+            f"可比范围：{'、'.join(applied) if applied else '无硬约束'}。"
+            f"与输入策划条件最接近的因素：{'、'.join(x['label'] for x in closest)}。{qual_txt}"
         )
         return RecommendationExplanation(
             recommendation_summary=summary,
