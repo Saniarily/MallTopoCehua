@@ -84,6 +84,7 @@ def _build_case_db(
     normalize_positions: bool = False,
     max_rows: int | None = None,
 ) -> CaseDatabase:
+    coercion_report = dict(getattr(df, "attrs", {}).get("coercion_report", {}))
     df = df.copy()
     if max_rows:
         df = df.head(max_rows)
@@ -130,6 +131,7 @@ def _build_case_db(
         "graph_metric_cols": list(GRAPH_METRIC_COLS),
         "split": {**split_cfg, "group_col": spec.mall_id_col, **res.summary()},
         "n_missing_graphs": n_missing,
+        "coercion_report": coercion_report,
         "environment": collect_environment_info(),
     }
     return CaseDatabase(cases=df, graphs=graphs, manifest=manifest)

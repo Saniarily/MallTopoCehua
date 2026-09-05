@@ -61,7 +61,8 @@ class _ColumnScaler:
         self.std_: dict[str, float] = {}
 
     def _pre(self, df: pd.DataFrame) -> pd.DataFrame:
-        x = df.reindex(columns=self.cols).astype(float)
+        x = df.reindex(columns=self.cols)
+        x = x.apply(lambda col: pd.to_numeric(col, errors="coerce")).astype(float)
         for c in self.cols:
             if c in self.log1p:
                 x[c] = np.log1p(x[c].clip(lower=0))
