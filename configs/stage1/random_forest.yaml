@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_random_forest
+stage1:
+  ranker: {name: random_forest, params: {n_estimators: 200, min_samples_leaf: 3, pairs_per_query: 15}}

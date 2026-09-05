@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_ridge
+stage1:
+  ranker: {name: ridge, params: {alpha: 1.0, pairs_per_query: 15}}

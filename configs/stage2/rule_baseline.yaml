@@ -1,0 +1,11 @@
+seed: 0
+experiment_name: stage2_rule_baseline
+stage2:
+  generator: {name: rule_expander, params: {label_style: letters}}
+  geometry_decoder: {name: skeleton_embed, params: {margin_frac: 0.08}}
+  evaluator:
+    name: topology_spec
+    params:
+      thresholds: {node_deviation_pct_max: 30, edge_accuracy_pct_min: 70, density_deviation_pct_max: 40, aspl_deviation_pct_max: 35, inference_time_s_max: 60}
+n_candidates: 3
+output_dir: outputs/generated_layouts

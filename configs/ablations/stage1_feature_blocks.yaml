@@ -1,0 +1,8 @@
+# Single-factor ablation over feature blocks (Phase 2 will run this via scripts/run_ablation.py)
+base_config: configs/stage1/random_forest.yaml
+seeds: [42, 43, 44]
+factors:
+  - {name: no_condition, overrides: {features.use_condition: false}}
+  - {name: no_prototype_metrics, overrides: {features.use_prototype_metrics: false}}
+  - {name: no_graph_metrics, overrides: {features.use_graph_metrics: false}}
+  - {name: no_match, overrides: {features.use_match: false}}

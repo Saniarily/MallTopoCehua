@@ -1,0 +1,4 @@
+_base_: base.yaml
+experiment_name: stage1_extra_trees
+stage1:
+  ranker: {name: extra_trees, params: {n_estimators: 200, pairs_per_query: 15}}

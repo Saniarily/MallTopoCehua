@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mall-space-planner"
+version = "0.1.0"
+description = "MallTopoCehua: two-stage mall spatial planning framework with topology prototypes as an interpretable intermediate state."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "MallTopoCehua contributors" }]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+    "scipy>=1.10",
+    "networkx>=3.1",
+    "shapely>=2.0",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "matplotlib>=3.7",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+# Gradient-boosting rankers (Phase 2). Any one of them is enough; all are registered lazily.
+boosting = ["lightgbm>=4.0", "xgboost>=2.0", "catboost>=1.2"]
+# Deep models (Phase 2/4). PyG is optional; the GNN encoders degrade gracefully when missing.
+deep = ["torch>=2.1", "torch-geometric>=2.5"]
+# Explainability
+explain = ["shap>=0.44"]
+# Viewer Hub + API (Phase 5)
+app = ["streamlit>=1.30", "fastapi>=0.104", "uvicorn>=0.24", "plotly>=5.18"]
+# Experiment tracking (local mode by default)
+tracking = ["mlflow>=2.9"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.1"]
+all = [
+    "mall-space-planner[boosting,deep,explain,app,tracking,dev]",
+]
+
+[project.scripts]
+msp-audit = "mall_space_planner.cli:audit_main"
+msp-prepare = "mall_space_planner.cli:prepare_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mall_space_planner = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "smoke: fast end-to-end checks on synthetic data",
+    "slow: requires real data or long training",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]

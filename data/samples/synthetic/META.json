@@ -1,0 +1,8 @@
+{
+  "synthetic": true,
+  "seed": 0,
+  "n_malls": 40,
+  "n_floors": 108,
+  "n_stage2": 120,
+  "note": "Synthetic data for smoke tests only. Do not report results on it as experimental findings."
+}

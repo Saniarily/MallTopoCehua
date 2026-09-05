@@ -1,0 +1,30 @@
+# Core (required for Phase 0/1 smoke tests)
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.3
+scipy>=1.10
+networkx>=3.1
+shapely>=2.0
+pydantic>=2.5
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.7
+joblib>=1.3
+pytest>=7.4
+
+# Optional: gradient boosting rankers (install any subset)
+# lightgbm>=4.0
+# xgboost>=2.0
+# catboost>=1.2
+
+# Optional: deep models (PyTorch; use MPS on Apple Silicon)
+# torch>=2.1
+# torch-geometric>=2.5
+
+# Optional: explainability / apps / tracking
+# shap>=0.44
+# streamlit>=1.30
+# fastapi>=0.104
+# uvicorn>=0.24
+# plotly>=5.18
+# mlflow>=2.9
