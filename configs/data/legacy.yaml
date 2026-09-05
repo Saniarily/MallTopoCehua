@@ -17,4 +17,4 @@ dataset:
       metric_cols: [L1_density, L2_diameter, L2_complexity, L2_integration]
     split: {test_ratio: 0.1, val_ratio: 0.1, seed: 42, stratify_col: city_cluster}
 processed_dir: data/processed/legacy
-sharegpt_json: "/path/to/sharegpt_data.json"   # Stage-2 corpus (set on your machine)
+sharegpt_json: "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/MallTopoCehua/sharegpt_data.json"   # Stage-2 corpus (set on your machine)
