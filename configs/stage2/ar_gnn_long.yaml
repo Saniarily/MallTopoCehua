@@ -1,0 +1,4 @@
+_base_: ar_gnn.yaml
+experiment_name: stage2_ar_gnn_long   # capacity: 20 epochs, d_model 96 (anchor acc still rising at epoch 10)
+stage2:
+  generator: {name: ar_gnn, params: {epochs: 20, patience: 5, d_model: 96, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn_long}}

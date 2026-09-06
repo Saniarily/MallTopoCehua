@@ -1,5 +1,4 @@
 _base_: ar_gnn.yaml
-experiment_name: stage2_ar_gnn_bfs_order   # ablation: teacher-forcing order = BFS-from-skeleton instead of corpus label order (needs its own training run)
-checkpoint_dir: outputs/checkpoints/stage2
+experiment_name: stage2_ar_gnn_bfs_order   # ablation: teacher-forcing order = BFS-from-skeleton (v1) instead of corpus label order
 stage2:
   generator: {name: ar_gnn, params: {order: bfs, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn_bfs_order}}

@@ -1,0 +1,4 @@
+_base_: ar_gnn.yaml
+experiment_name: stage2_ar_gnn_basic_feats   # ablation: v1 node features only (no age/recency/skeleton-degree/RWSE)
+stage2:
+  generator: {name: ar_gnn, params: {feature_set: basic, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn_basic_feats}}

@@ -11,9 +11,12 @@ from mall_space_planner.registry import build
 from mall_space_planner.utils import ProjectPaths, resolve_config, seed_everything, setup_logging
 
 def main() -> None:
-    p = base_parser("Train stage-2 generator"); p.add_argument("--corpus", default=None); p.add_argument("--limit", type=int, default=None)
+    p = base_parser("Train stage-2 generator"); p.add_argument("--corpus", default=None); p.add_argument("--limit", type=int, default=None); p.add_argument("--force", action="store_true")
     a = p.parse_args(); setup_logging(a.log_level); cfg = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT); seed_everything(int(cfg.get("seed", 42)))
     corpus = a.corpus or cfg.get("corpus", "data/samples/synthetic/sharegpt_sample.json")
+    ck = paths.resolve(cfg.get("checkpoint_dir", "outputs/checkpoints/stage2")) / cfg.get("experiment_name", "ar_gnn")
+    if (ck / "ar_gnn.pt").exists() and not a.force:
+        print(f"cached checkpoint: {ck} (use --force to retrain)"); return
     samples = load_sharegpt(paths.resolve(corpus), limit=a.limit or cfg.get("train_limit"))
     # hold out the last `eval_holdout` samples for evaluate_stage2 (same order as file) so train/eval never overlap
     hold = int(cfg.get("eval_holdout", 0)); train = samples[:-hold] if hold else samples
