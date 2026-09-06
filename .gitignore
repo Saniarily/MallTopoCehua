@@ -42,3 +42,5 @@ mlruns/
 
 # Machine-local config overrides (paths etc.)
 configs/**/*.local.yaml
+# thesis figures are regenerated; keep the tracked copies under docs/thesis/figures only
+outputs/thesis/

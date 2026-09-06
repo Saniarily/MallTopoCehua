@@ -1,0 +1,29 @@
+{
+  "classes": [
+    "一字型",
+    "复杂集中型",
+    "多环型",
+    "简单型",
+    "简单环型",
+    "简单集中型"
+  ],
+  "n_train": 4303,
+  "n_test": 526,
+  "majority_class": "一字型",
+  "majority_accuracy": 0.3669201520912547,
+  "lgbm_accuracy": 0.3193916349809886,
+  "lgbm_macro_f1": 0.20626039784703407,
+  "lgbm_feature_importance": {
+    "people": 2683.0,
+    "GDP_2023": 746.0,
+    "PCDI_2023": 936.0,
+    "TP_2023": 717.0,
+    "mall_area_count": 1791.0,
+    "nearest_distance_km": 3727.0,
+    "count_1km": 1520.0,
+    "count_2km": 1981.0,
+    "total_area": 4990.0,
+    "Tx": 5984.0,
+    "city_cluster": 125.0
+  }
+}

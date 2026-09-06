@@ -1,0 +1,171 @@
+# 论文图表样式（所有图共用；改这里即可全局换字体 / 配色 / 尺寸 / 中文标签）
+# 生成：python scripts/make_thesis_report.py --results data/results_snapshot --out outputs/thesis
+fonts:
+  # 按顺序探测，取第一个本机存在的字体；Mac 上通常是 PingFang SC / Hiragino Sans GB
+  cjk_candidates: ["PingFang SC", "Hiragino Sans GB", "Songti SC", "STHeiti", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei"]
+  latin_candidates: ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"]
+  size_base: 10.5      # 正文字号（pt）
+  size_title: 12
+  size_label: 10.5
+  size_tick: 9.5
+  size_legend: 9.5
+  size_annot: 8.5
+
+figure:
+  dpi: 300
+  formats: ["png", "pdf", "svg"]   # svg/pdf 可在 Illustrator / Inkscape 中直接编辑
+  width_single: 3.5     # 英寸：单栏
+  width_double: 7.2     # 英寸：双栏
+  height_ratio: 0.62
+  transparent: false
+  grid_alpha: 0.25
+  spine_width: 0.8
+  bar_edge: "white"
+  errorbar_capsize: 3
+  savefig_pad: 0.05
+
+palette:
+  # 类别色（Okabe–Ito 无障碍配色为基础，略调深）
+  main: ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#999999"]
+  reference: "#7F7F7F"       # 上/下界、参照线
+  highlight: "#C0392B"       # 本文方法强调色
+  ours: "#0072B2"
+  baseline: "#A6A6A6"
+  ground_truth: "#2C3E50"
+  ci_fill_alpha: 0.18
+  method_colors:             # 指定方法的固定颜色（可选；未列出的按 main 轮换）
+    quality_oracle: "#7F7F7F"
+    random: "#BDBDBD"
+    weighted_rule: "#9E9E9E"
+    extra_trees: "#0072B2"
+    deep_residual: "#C0392B"
+    ridge: "#56B4E9"
+    lgbm_regressor: "#009E73"
+    lgbm_lambdarank: "#E69F00"
+    random_forest: "#CC79A7"
+    mlp: "#D55E00"
+    ref_ground_truth: "#2C3E50"
+    stage2_rule_baseline: "#A6A6A6"
+    stage2_search_baseline: "#7F7F7F"
+    stage2_ar_gnn: "#0072B2"
+    stage2_ar_gnn_greedy: "#56B4E9"
+    stage2_ar_gnn_bestof16: "#C0392B"
+    stage2_ar_gnn_long: "#009E73"
+    stage2_ar_gnn_long_bestof16: "#E69F00"
+    stage2_ar_gnn_bfs_order: "#CC79A7"
+    stage2_ar_gnn_single_label: "#D55E00"
+    stage2_ar_gnn_basic_feats: "#F0E442"
+
+# 中文显示名（图例、坐标轴、表格）。键 = 代码中的名字。改这里即可改图中文字。
+labels:
+  methods:
+    quality_oracle: "评分上界（直接按真实评分排序）"
+    random: "随机排序（下界）"
+    weighted_rule: "规则加权（参照）"
+    extra_trees: "极端随机树（本文默认）"
+    ridge: "岭回归"
+    lgbm_regressor: "梯度提升回归"
+    lgbm_lambdarank: "LambdaMART 排序学习"
+    lgbm_lambdarank_valuegrade: "LambdaMART（数值分级）"
+    random_forest: "随机森林"
+    mlp: "多层感知机（纯表格）"
+    deep_residual: "Transformer+GNN 残差融合（本文）"
+    ref_ground_truth: "真实建成拓扑（参照）"
+    stage2_rule_baseline: "规则扩展"
+    stage2_search_baseline: "规则扩展 + 16 次择优"
+    stage2_ar_gnn: "自回归图网络（本文）"
+    stage2_ar_gnn_greedy: "自回归图网络·贪心解码"
+    stage2_ar_gnn_bestof16: "自回归图网络 + 16 次择优（本文推荐）"
+    stage2_ar_gnn_long: "自回归图网络·大模型 20 轮"
+    stage2_ar_gnn_long_bestof16: "大模型 + 16 次择优"
+    stage2_ar_gnn_bfs_order: "消融：改用广度优先生长顺序"
+    stage2_ar_gnn_single_label: "消融：只认单一正确接点"
+    stage2_ar_gnn_basic_feats: "消融：去掉结构特征"
+    ar_gnn_v1: "第一版（广度优先 + 单接点 + 基础特征）"
+    ref_random: "随机推荐"
+    ref_majority: "永远推荐最常见类型"
+    ref_oracle: "已知真实类型（上界）"
+    ref_quality_oracle_upper_bound: "按真实评分排序"
+    stage1_ridge: "岭回归"
+    stage1_lgbm_lambdarank: "LambdaMART"
+    stage1_extra_trees: "极端随机树"
+    stage1_rule_knn: "规则加权"
+    stage1_deep_residual: "残差融合深度模型"
+  variants:
+    full: "完整特征"
+    no_graph_metrics: "去掉重算图指标"
+    no_legacy_metrics: "去掉 L1/L2 指标"
+    no_extra_metrics: "去掉 18 个扩展拓扑列"
+    no_condition: "去掉策划条件"
+    no_match: "去掉条件–案例匹配特征"
+    no_retriever: "去掉召回阶段"
+    full_residual_tf_gnn: "完整（残差+Transformer+GNN+小样本技巧）"
+    no_gnn: "去掉图网络分支"
+    mlp_instead_of_transformer: "Transformer 换为普通网络"
+    no_smallsample_tricks: "去掉小样本技巧"
+    no_residual_end2end: "去掉残差结构（端到端）"
+  metrics:
+    ndcg@5: "前 5 名推荐质量（NDCG@5）"
+    ndcg@10: "前 10 名推荐质量（NDCG@10）"
+    map: "平均精度（MAP）"
+    spearman: "排序相关性（Spearman）"
+    pairwise_acc: "两两比较正确率"
+    overall_pass: "大纲 5 项指标全部合格率"
+    node_deviation_pct: "节点数偏差 (%)"
+    density_deviation_pct: "路网密度偏差 (%)"
+    aspl_deviation_pct: "平均步行路径偏差 (%)"
+    n_components: "连通片数"
+    target_edge_recall_pct: "真实连接命中率 (%)"
+    target_edge_precision_pct: "生成连接正确率 (%)"
+    attach_recall_pct: "分支位置召回率 (%)"
+    attach_precision_pct: "分支位置正确率 (%)"
+    degree_emd: "节点连接度分布差异 (越小越像)"
+    new_new_ratio_gen: "走廊式生长比例"
+    inference_time_s: "单次生成耗时 (秒)"
+    type_hit@5: "前 5 名含真实类型比例"
+    type_precision@5: "前 5 名真实类型占比"
+    metric_dist@5: "前 5 名拓扑指标距离"
+    quality@5: "前 5 名平均评分"
+    type_precision@10: "前 10 名真实类型占比"
+    quality@10: "前 10 名平均评分"
+    val_anchor_acc: "接点预测准确率（验证集）"
+    val_anchor_top3: "接点前 3 命中率（验证集）"
+    train_loss: "训练损失"
+  layout_types: ["一字型", "简单环型", "多环型", "简单型", "简单集中型", "复杂集中型"]
+  clusters: {"1": "第 1 类城市（高能级）", "2": "第 2 类城市（中等）", "3": "第 3 类城市（一般）"}
+  conditions:
+    people: "城市人口"
+    GDP_2023: "城市 GDP"
+    PCDI_2023: "人均可支配收入"
+    TP_2023: "消费总量"
+    mall_area_count: "区域商场数量"
+    nearest_distance_km: "最近商场距离"
+    count_1km: "1 km 内商场数"
+    count_2km: "2 km 内商场数"
+    total_area: "项目总建筑面积"
+    Tx: "Tx 指标"
+    city_cluster: "城市类别"
+
+# 图编号前缀与标题（改这里改图题；文件名 = 编号_英文短名）
+figure_titles:
+  F01: "两阶段智能策划框架总览"
+  F02: "案例库数据概况"
+  F03: "策划条件与商场评分的相关性"
+  F04: "无泄漏的数据划分方式"
+  F05: "阶段一：从策划条件到可比案例的检索流程"
+  F06: "阶段二：骨架 → 生成拓扑 → 真实拓扑 示例"
+  F07: "自回归生成过程逐步示意"
+  R01: "阶段一：不同排序方法的推荐质量比较"
+  R02: "阶段一：多指标比较"
+  R03: "阶段一：特征块消融"
+  R04: "阶段一：深度模型成分消融"
+  R05: "阶段一：各类城市下不同布局类型的期望评分"
+  R06: "阶段一：布局类型模型的增量价值与决策收益"
+  R07: "阶段一：推荐原型与真实建成类型的一致性"
+  R08: "策划条件对布局类型的可预测性"
+  R09: "阶段二：各生成方法综合比较"
+  R10: "阶段二：分支位置召回率 vs 正确率"
+  R11: "阶段二：解码策略的权衡"
+  R12: "阶段二：自回归图网络成分消融"
+  R13: "阶段二：训练曲线"
+  R14: "阶段二：生长模式与真实拓扑的一致性"
