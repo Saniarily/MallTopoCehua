@@ -79,9 +79,10 @@ def test_ar_gnn_teacher_steps_are_consistent():
     s = _synthetic_expansion_samples(3)[0]
     order = canonical_order(s.skeleton, s.target)
     assert set(order) == set(s.target.nodes) - set(s.skeleton.nodes)
-    steps = teacher_steps(s.skeleton, s.target); assert len(steps) == len(order)
-    present, edges, anchor, second = steps[0]
-    assert anchor in present and (second is None or second in present)
+    steps = teacher_steps(s.skeleton, s.target); assert 0 < len(steps) <= len(order)
+    st = steps[0]; assert st["valid"] and all(0 <= i < len(st["present"]) for i in st["valid"])
+    # label order: the corpus' own creation order (deferred only when no neighbour is present yet)
+    assert canonical_order(s.skeleton, s.target, "bfs") and set(canonical_order(s.skeleton, s.target, "bfs")) == set(order)
 
 
 def test_ar_gnn_fit_generate_save_load_and_evaluate(tmp_path):
@@ -140,3 +141,13 @@ def test_listwise_ce_vectorised_matches_loop():
     g = torch.Generator().manual_seed(1); s = torch.randn(50, generator=g); r = torch.rand(50, generator=g) * 4; grp = torch.randint(0, 4, (50,), generator=g); grp[:4] = torch.arange(4)
     ref = sum(-(torch.softmax(r[grp == k], 0) * torch.log_softmax(s[grp == k], 0)).sum() for k in range(4)) / 4
     assert torch.allclose(ref, listwise_softmax_ce(s, r, grp, 4), atol=1e-5)
+
+
+def test_ar_gnn_set_nll_and_padding():
+    torch = pytest.importorskip("torch")
+    from mall_space_planner.stage2.generators.ar_gnn import set_nll, _pad
+    logits = torch.tensor([0.0, 1.0, 2.0, 0.5, 0.5]); batch = torch.tensor([0, 0, 0, 1, 1]); valid = torch.tensor([False, True, True, True, False])
+    p0 = torch.softmax(logits[:3], 0); p1 = torch.softmax(logits[3:], 0)
+    ref = (-(p0[1] + p0[2]).log() - p1[0].log()) / 2
+    assert torch.allclose(set_nll(logits, batch, 2, valid), ref, atol=1e-6)
+    assert _pad(logits, batch, 2).shape == (2, 3)

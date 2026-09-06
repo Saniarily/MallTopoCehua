@@ -51,8 +51,14 @@ PY
   python scripts/train_stage2.py --config configs/stage2/ar_gnn.yaml --corpus "$CORPUS" \
     --override "stage2.generator.params.checkpoint=null" "stage2.generator.params.device=$DEVICE"
 
-  echo "== [S2-B] 4-way generator comparison on the SAME 600 held-out skeletons =="
-  for CFG in rule_baseline search_baseline ar_gnn ar_gnn_bestof16; do
+  echo "== [S2-B] generator comparison on the SAME 600 held-out skeletons (+ ground-truth reference row) =="
+  python scripts/evaluate_stage2.py --config configs/stage2/rule_baseline.yaml --corpus "$CORPUS" --limit "$S2_LIMIT" --ground-truth \
+    --override "eval_output_dir=$S2_OUT" || echo "!! ground truth failed"
+  for CFG in rule_baseline search_baseline; do
+    python scripts/evaluate_stage2.py --config "configs/stage2/$CFG.yaml" --corpus "$CORPUS" --limit "$S2_LIMIT" \
+      --override "eval_output_dir=$S2_OUT" || echo "!! $CFG failed"
+  done
+  for CFG in ar_gnn ar_gnn_greedy ar_gnn_bestof16; do   # only learned generators accept `device`
     python scripts/evaluate_stage2.py --config "configs/stage2/$CFG.yaml" --corpus "$CORPUS" --limit "$S2_LIMIT" \
       --override "eval_output_dir=$S2_OUT" "stage2.generator.params.device=$DEVICE" || echo "!! $CFG failed"
   done
@@ -61,7 +67,7 @@ import json, glob, os
 rows = []
 for f in sorted(glob.glob("outputs/experiments/stage2_eval_r3/*/aggregate.json")):
     a = json.load(open(f)); rows.append((os.path.basename(os.path.dirname(f)), a))
-keys = ["overall_pass", "node_deviation_pct", "edge_accuracy_pct", "density_deviation_pct", "aspl_deviation_pct", "target_edge_recall_pct", "target_edge_precision_pct", "inference_time_s"]
+keys = ["overall_pass", "node_deviation_pct", "edge_accuracy_pct", "density_deviation_pct", "aspl_deviation_pct", "n_components", "target_edge_recall_pct", "target_edge_precision_pct", "inference_time_s"]
 print("| generator | " + " | ".join(keys) + " |"); print("|" + "---|" * (len(keys) + 1))
 for n, a in rows: print(f"| {n} | " + " | ".join(f"{a.get(k, float('nan')):.3f}" for k in keys) + " |")
 open("outputs/experiments/stage2_eval_r3/table.md", "w").write("| generator | " + " | ".join(keys) + " |\n|" + "---|" * (len(keys) + 1) + "\n" + "\n".join(f"| {n} | " + " | ".join(f"{a.get(k, float('nan')):.3f}" for k in keys) + " |" for n, a in rows) + "\n")
