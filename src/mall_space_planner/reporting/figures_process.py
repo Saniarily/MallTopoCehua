@@ -23,6 +23,13 @@ def _arrow(ax, x0, y0, x1, y1, color="#333"):
     ax.add_patch(FancyArrowPatch((x0, y0), (x1, y1), arrowstyle="-|>", mutation_scale=12, lw=1.1, color=color))
 
 
+def _elbow(ax, pts, color="#333"):
+    """Poly-line arrow through ``pts`` (list of (x, y)); arrow head on the last segment. Used to route around boxes."""
+    xs, ys = zip(*pts)
+    ax.plot(xs[:-1], ys[:-1], color=color, lw=1.1, solid_capstyle="round")
+    _arrow(ax, *pts[-2], *pts[-1], color=color)
+
+
 def f01_framework(results: Path, out: Path) -> list[Path]:
     s = load_style()
     f, ax = plt.subplots(figsize=(s["figure"]["width_double"], 4.6))
@@ -47,15 +54,15 @@ def f01_framework(results: Path, out: Path) -> list[Path]:
     _box(ax, 7.3, 1.95, 2.35, 0.85, "⑦ 修复与双重评估\n拓扑 5 项指标 + 几何检查", c2, fs=8.5)
     _box(ax, 7.3, 0.8, 2.35, 0.85, "输出：JSON / GeoJSON\nSVG / PNG 布局草案", "#FFFFFF", ec="#D55E00", fs=8.5)
     # bottom: data & evaluation
-    _box(ax, 0.2, 0.3, 6.6, 1.5, "案例库：1 209 座商场 · 5 380 层平面拓扑 · 城市/商圈/体量条件 · 公众综合评分\n"
-         "评估：按商场分组的无泄漏划分 · 上/下界参照 · 多随机种子 · 消融实验 · 与真实建成拓扑对比", c3, fs=8.8)
+    _box(ax, 0.2, 0.3, 6.6, 1.5, "案例库：1 209 座商场 · 5 380 层平面拓扑\n城市 / 商圈 / 体量条件 · 公众综合评分\n"
+         "评估：按商场分组的无泄漏划分 · 上 / 下界参照\n多随机种子 · 消融实验 · 与真实建成拓扑对比", c3, fs=8.6)
     # arrows
     _arrow(ax, 2.3, 4.8, 2.9, 4.75)
     _arrow(ax, 4.7, 4.75, 4.95, 4.75)
     _arrow(ax, 5.8, 4.3, 3.8, 3.95)
     _arrow(ax, 4.7, 3.5, 4.95, 3.5)
     _arrow(ax, 5.8, 3.05, 4.8, 2.9)
-    _arrow(ax, 6.2, 2.67, 7.3, 4.6, color="#D55E00")
+    _elbow(ax, [(6.2, 2.67), (6.95, 2.67), (6.95, 4.67), (7.3, 4.67)], color="#D55E00")  # routed through the gap between the two stages
     _arrow(ax, 8.47, 4.25, 8.47, 3.95, color="#D55E00")
     _arrow(ax, 8.47, 3.1, 8.47, 2.8, color="#D55E00")
     _arrow(ax, 8.47, 1.95, 8.47, 1.65, color="#D55E00")
@@ -146,7 +153,7 @@ def f03_condition_correlation(results: Path, out: Path) -> list[Path]:
         ax.set_yticklabels([label("conditions", k) if k in s["labels"]["conditions"] else {"g_num_nodes": "节点数", "g_density": "路网密度", "g_avg_shortest_path": "平均步行路径", "g_num_cycles": "环路数", "L2_integration": "整合度", "L1_density": "L1 密度", "L2_complexity": "拓扑复杂度"}.get(k, k) for k in ser.index])
         ax.axvline(0, color="#444", lw=0.9)
         ax.set_title(ttl, loc="left", fontsize=s["fonts"]["size_label"])
-        ax.set_xlabel("与综合评分的秩相关系数（+ 正相关 / − 负相关）")
+        ax.set_xlabel("与综合评分的秩相关系数")
         ax.grid(axis="y", alpha=0)
         lo, hi = min(ser.min(), 0), max(ser.max(), 0)
         ax.set_xlim(lo - 0.12, hi + 0.12)
@@ -155,7 +162,7 @@ def f03_condition_correlation(results: Path, out: Path) -> list[Path]:
             ax.text(v + (0.012 if v >= 0 else -0.012), i, f"{v:+.2f}", va="center", ha="left" if v >= 0 else "right", fontsize=s["fonts"]["size_annot"])
         ax.tick_params(axis="y", pad=2)
     f.suptitle(title_for("F03") + note, x=0.02, ha="left", fontweight="bold")
-    f.text(0.02, -0.02, "读法：体量与评分的关联最强；城市经济指标关联很弱甚至为负 → 评分主要由体量与商圈条件解释，布局类型是叠加其上的二阶因素。", fontsize=s["fonts"]["size_annot"], color="#555")
+    f.text(0.02, -0.02, "读法：+ 正相关 / − 负相关。体量与评分的关联最强；城市经济指标关联很弱甚至为负 → 评分主要由体量与商圈条件解释，布局类型是叠加其上的二阶因素。", fontsize=s["fonts"]["size_annot"], color="#555")
     f.tight_layout()
     return savefig(f, out, "F03_condition_score_correlation")
 
@@ -268,7 +275,7 @@ def _gen_request(smp, seed=0):
 
 def f06_generation_examples(results: Path, out: Path, per_type: int = 1) -> list[Path]:
     """One example per layout type (6 rows) x [skeleton, rule, rule+16, ours(+16), ground truth]."""
-    from mall_space_planner.reporting.graphdraw import draw_topology, legend_handles, skeleton_layout
+    from mall_space_planner.reporting.graphdraw import draw_topology, frame_of, full_layout, legend_handles, skeleton_layout
     from mall_space_planner.topology.convert import to_networkx
     from mall_space_planner.topology.metrics import attachment_overlap
 
@@ -278,38 +285,43 @@ def f06_generation_examples(results: Path, out: Path, per_type: int = 1) -> list
     s = load_style()
     rule, search, ar = _generators(results)
     picks = _pick_examples(samples, per_type=per_type)
-    cols = [("骨架（阶段一原型）", None), ("规则扩展", rule), ("规则 + 16 次择优", search), ("自回归图网络 + 16 次择优（本文）" if ar else "（无 AR-GNN 检查点）", ar), ("真实建成拓扑", "gt")]
-    f, axes = plt.subplots(len(picks), len(cols), figsize=(s["figure"]["width_double"] * 1.15, 1.75 * len(picks) + 0.9))
+    cols = [("骨架\n（阶段一原型）", None), ("规则扩展", rule), ("规则\n+ 16 次择优", search), ("自回归图网络（本文）\n+ 16 次择优" if ar else "（无 AR-GNN 检查点）", ar), ("真实建成拓扑", "gt")]
+    f, axes = plt.subplots(len(picks), len(cols), figsize=(s["figure"]["width_double"] * 1.15, 1.8 * len(picks) + 1.3))
     axes = np.atleast_2d(axes)
     for r, smp in enumerate(picks):
         sk_nodes = set(smp.skeleton.nodes)
         req, n_t = _gen_request(smp)
         sk_pos = skeleton_layout(to_networkx(smp.skeleton), seed=0)
-        for c, (ttl, gen) in enumerate(cols):
-            ax = axes[r, c]
-            if gen is None:
-                g = smp.skeleton
-            elif gen == "gt":
-                g = smp.target
-            else:
-                g = gen.generate(req, 0)
+        # lay out every panel of the row first so they can share one frame (same scale, same skeleton position)
+        graphs, poses = [], []
+        for ttl, gen in cols:
+            g = smp.skeleton if gen is None else (smp.target if gen == "gt" else gen.generate(req, 0))
             G = to_networkx(g)
+            graphs.append((g, G))
+            poses.append(sk_pos if gen is None else full_layout(G, sk_nodes, sk_pos, seed=r))
+        frame = frame_of(*poses)
+        for c, ((ttl, gen), (g, G), pos) in enumerate(zip(cols, graphs, poses)):
             extra = ""
             if gen not in (None, "gt"):
-                ar_, ap_ = attachment_overlap(smp.skeleton, smp.target, g)
+                _, ap_ = attachment_overlap(smp.skeleton, smp.target, g)
                 extra = f"\n分支位置正确率 {ap_:.0f}%"
             sub = f"{G.number_of_nodes()} 单元 / {G.number_of_edges()} 连接{extra}"
-            draw_topology(ax, G, sk_nodes, sk_pos=sk_pos, title=(ttl + "\n" + sub) if r == 0 else sub, seed=r, size_ref_n=max(n_t, smp.target.num_nodes))
-        axes[r, 0].text(-0.08, 0.5, f"{smp.layout_type.value}\n骨架 {smp.skeleton.num_nodes} → 目标 {n_t}", transform=axes[r, 0].transAxes, ha="right", va="center", fontsize=s["fonts"]["size_annot"], rotation=90)
-    f.legend(handles=legend_handles(), loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.01), fontsize=s["fonts"]["size_annot"])
-    f.suptitle(title_for("F06") + "  — 每行一种布局类型；同一行各图中骨架位置固定，便于对比", x=0.02, ha="left", fontweight="bold")
-    f.tight_layout(rect=(0, 0.03, 1, 0.98))
+            draw_topology(axes[r, c], G, sk_nodes, pos=pos, title=sub, seed=r, size_ref_n=max(n_t, smp.target.num_nodes), frame=frame)
+        axes[r, 0].text(-0.06, 0.5, f"{smp.layout_type.value}\n骨架 {smp.skeleton.num_nodes} → 目标 {n_t}", transform=axes[r, 0].transAxes, ha="right", va="center", fontsize=s["fonts"]["size_annot"], rotation=90)
+    f.legend(handles=legend_handles(), loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.005), fontsize=s["fonts"]["size_annot"])
+    f.suptitle(title_for("F06") + "  — 每行一种布局类型；同一行各图中骨架位置与比例尺固定，便于对比", x=0.02, ha="left", fontweight="bold")
+    f.tight_layout(rect=(0, 0.03, 1, 0.92))
+    # column headers in a dedicated band between the suptitle and the first row (never collide with panel titles)
+    for c, (ttl, _) in enumerate(cols):
+        bb = axes[0, c].get_position()
+        f.text((bb.x0 + bb.x1) / 2, bb.y1 + 0.04, ttl, ha="center", va="bottom", linespacing=1.15, fontsize=s["fonts"]["size_label"], fontweight="bold", color=s["palette"]["ours"] if "本文" in ttl else "#222")
     return savefig(f, out, "F06_generation_examples")
 
 
-def f06b_generation_gallery(results: Path, out: Path, n: int = 12) -> list[Path]:
-    """Gallery: 12 more examples, 3 columns [skeleton | ours | truth] x 4 rows per page, two pages."""
-    from mall_space_planner.reporting.graphdraw import draw_topology, legend_handles, skeleton_layout
+def f06b_generation_gallery(results: Path, out: Path, per_type: int = 3, per_page: int = 6) -> list[Path]:
+    """Gallery: more examples (``per_type`` per layout type), each = [skeleton | ours | truth] with a shared
+    frame; two examples per row separated by a spacer column; ``per_page`` examples per page."""
+    from mall_space_planner.reporting.graphdraw import draw_topology, frame_of, full_layout, legend_handles, skeleton_layout
     from mall_space_planner.topology.convert import to_networkx
     from mall_space_planner.topology.metrics import attachment_overlap
 
@@ -319,27 +331,41 @@ def f06b_generation_gallery(results: Path, out: Path, n: int = 12) -> list[Path]
     s = load_style()
     rule, search, ar = _generators(results)
     gen = ar or search
-    picks = _pick_examples(samples, per_type=2, seed=11, min_sk=5, max_sk=40)[:n]
+    gen_name = "本文生成" if ar else "规则 + 择优生成"
+    picks = _pick_examples(samples, per_type=per_type, seed=11, min_sk=5, max_sk=40)
+    # order pages so that every page mixes layout types (type-major -> round-robin)
+    by_type: dict[str, list] = {}
+    for smp in picks:
+        by_type.setdefault(smp.layout_type.value, []).append(smp)
+    picks = [lst[i] for i in range(per_type) for lst in by_type.values() if i < len(lst)]
     written = []
-    per_page = 6
     for page in range(0, len(picks), per_page):
         chunk = picks[page : page + per_page]
-        f, axes = plt.subplots(len(chunk) // 2 if len(chunk) % 2 == 0 else len(chunk) // 2 + 1, 6, figsize=(s["figure"]["width_double"] * 1.15, 1.9 * ((len(chunk) + 1) // 2) + 0.7))
-        axes = np.atleast_2d(axes)
+        nrow = (len(chunk) + 1) // 2
+        f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 2.0 * nrow + 0.9))
+        gs = f.add_gridspec(nrow, 7, width_ratios=[1, 1, 1, 0.18, 1, 1, 1], hspace=0.55, wspace=0.12, left=0.02, right=0.98, top=0.90, bottom=0.07)
         for i, smp in enumerate(chunk):
             rr, cc = divmod(i, 2)
+            base = 0 if cc == 0 else 4
             sk_nodes = set(smp.skeleton.nodes)
             req, n_t = _gen_request(smp)
             sk_pos = skeleton_layout(to_networkx(smp.skeleton), seed=0)
             g_ours = gen.generate(req, 0)
             ap = attachment_overlap(smp.skeleton, smp.target, g_ours)[1]
-            for k, (g, ttl) in enumerate([(smp.skeleton, f"{smp.layout_type.value} · 骨架 {smp.skeleton.num_nodes}"), (g_ours, f"本文生成 {g_ours.num_nodes} 单元 · 分支正确 {ap:.0f}%"), (smp.target, f"真实建成 {smp.target.num_nodes} 单元")]):
-                draw_topology(axes[rr, cc * 3 + k], to_networkx(g), sk_nodes, sk_pos=sk_pos, title=ttl, seed=i, size_ref_n=max(n_t, smp.target.num_nodes))
-        for ax in axes.ravel()[len(chunk) * 3 :]:
-            ax.axis("off")
-        f.legend(handles=legend_handles(), loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.01), fontsize=s["fonts"]["size_annot"])
-        f.suptitle(f"{title_for('F06')}（补充示例 {page // per_page + 1}）", x=0.02, ha="left", fontweight="bold")
-        f.tight_layout(rect=(0, 0.03, 1, 0.98))
+            G_ours, G_gt = to_networkx(g_ours), to_networkx(smp.target)
+            p_ours = full_layout(G_ours, sk_nodes, sk_pos, seed=i)
+            p_gt = full_layout(G_gt, sk_nodes, sk_pos, seed=i)
+            frame = frame_of(sk_pos, p_ours, p_gt)
+            panels = [
+                (to_networkx(smp.skeleton), sk_pos, f"{smp.layout_type.value} · 骨架\n{smp.skeleton.num_nodes} 单元"),
+                (G_ours, p_ours, f"{gen_name} {g_ours.num_nodes} 单元\n分支位置正确率 {ap:.0f}%"),
+                (G_gt, p_gt, f"真实建成\n{smp.target.num_nodes} 单元"),
+            ]
+            for k, (G, pos, ttl) in enumerate(panels):
+                ax = f.add_subplot(gs[rr, base + k])
+                draw_topology(ax, G, sk_nodes, pos=pos, title=ttl, seed=i, size_ref_n=max(n_t, smp.target.num_nodes), frame=frame)
+        f.legend(handles=legend_handles(), loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0), fontsize=s["fonts"]["size_annot"])
+        f.suptitle(f"{title_for('F06')}（补充示例 {page // per_page + 1}：骨架 → {gen_name} → 真实建成）", x=0.02, ha="left", fontweight="bold")
         written += savefig(f, out, f"F06b_generation_gallery_{page // per_page + 1}")
     return written
 
@@ -354,17 +380,20 @@ def f07_autoregressive_steps(results: Path, out: Path, n_steps: int = 7) -> list
     if not samples:
         return []
     s = load_style()
-    cands = [x for x in samples if 8 <= x.skeleton.num_nodes <= 12 and x.target.num_nodes - x.skeleton.num_nodes >= n_steps + 2]
+    from mall_space_planner.reporting.graphdraw import frame_of, full_layout
+
+    # a connected, medium-size example whose target grows by a good margin
+    cands = [x for x in samples if 8 <= x.skeleton.num_nodes <= 14 and n_steps + 4 <= x.target.num_nodes - x.skeleton.num_nodes <= 22
+             and nx.is_connected(to_networkx(x.skeleton)) and nx.is_connected(to_networkx(x.target))]
     smp = cands[3] if len(cands) > 3 else (cands[0] if cands else samples[0])
     tg = to_networkx(smp.target)
     order = canonical_order(smp.skeleton, smp.target, "label")
     sk_nodes = set(smp.skeleton.nodes)
-    from mall_space_planner.reporting.graphdraw import full_layout
     sk_pos = skeleton_layout(to_networkx(smp.skeleton), seed=0)
     pos = full_layout(tg, sk_nodes, sk_pos, seed=0)
-    Pxy = np.array(list(pos.values()))
-    frame = ((Pxy[:, 0].min(), Pxy[:, 0].max()), (Pxy[:, 1].min(), Pxy[:, 1].max()))
     steps = min(n_steps, len(order))
+    shown = list(smp.skeleton.nodes) + list(order[:steps])
+    frame_steps = frame_of({k: pos[k] for k in shown})  # tight frame around what the step panels actually show
     ncol = 4
     nrow = int(np.ceil((steps + 2) / ncol))
     f, axes = plt.subplots(nrow, ncol, figsize=(s["figure"]["width_double"], 2.0 * nrow + 0.6))
@@ -378,16 +407,16 @@ def f07_autoregressive_steps(results: Path, out: Path, n_steps: int = 7) -> list
             present.append(v)
             nbrs = [u for u in tg.neighbors(v) if u in present[:-1]]
             hl = [(u, v) for u in nbrs]
-            ttl = f"第 {i} 步：新单元 {v} 接到 {'、'.join(nbrs)}" + ("（形成环路）" if len(hl) > 1 else "")
+            ttl = f"第 {i} 步：新单元 {v} 接到 {'、'.join(nbrs)}" + ("\n（形成环路）" if len(hl) > 1 else "")
         G = tg.subgraph(present).copy()
-        draw_topology(axes[i], G, sk_nodes, pos={k: pos[k] for k in G.nodes}, title=ttl, highlight_edges=hl, seed=0, size_ref_n=tg.number_of_nodes(), frame=frame, node_scale=1.3)
-    # final: full target
-    draw_topology(axes[steps + 1], tg, sk_nodes, pos=pos, title=f"…… 直到目标规模：真实建成 {tg.number_of_nodes()} 单元", seed=0, size_ref_n=tg.number_of_nodes(), frame=frame, node_scale=1.3)
+        draw_topology(axes[i], G, sk_nodes, pos={k: pos[k] for k in G.nodes}, title=ttl, highlight_edges=hl, seed=0, size_ref_n=len(shown), frame=frame_steps, node_scale=1.15)
+    # final: full target in its own (larger) frame
+    draw_topology(axes[steps + 1], tg, sk_nodes, pos=pos, title=f"…… 直到目标规模\n真实建成 {tg.number_of_nodes()} 单元", seed=0, size_ref_n=tg.number_of_nodes(), frame=frame_of(pos), node_scale=1.0)
     for ax in axes[steps + 2 :]:
         ax.axis("off")
-    f.legend(handles=legend_handles() + [plt.Line2D([], [], color=s["palette"]["highlight"], lw=2.6, label="本步新建的连接（模型每步预测：接到哪里、是否再连第二条形成环路）")], loc="lower center", ncol=3, bbox_to_anchor=(0.5, -0.01), fontsize=s["fonts"]["size_annot"])
+    f.legend(handles=legend_handles() + [plt.Line2D([], [], color=s["palette"]["highlight"], lw=2.6, label="本步新建的连接（模型每步预测：接到哪里、是否再连第二条形成环路）")], loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.005), fontsize=s["fonts"]["size_annot"])
     f.suptitle(title_for("F07") + f"（{smp.layout_type.value if smp.layout_type else ''}，按语料自身的生长顺序）", x=0.02, ha="left", fontweight="bold")
-    f.tight_layout(rect=(0, 0.04, 1, 0.98))
+    f.tight_layout(rect=(0, 0.06, 1, 0.97))
     return savefig(f, out, "F07_autoregressive_steps")
 
 
@@ -405,19 +434,29 @@ def f08_layout_type_gallery(results: Path, out: Path, per_type: int = 3) -> list
     rng = np.random.RandomState(3)
     import networkx as nx
     f, axes = plt.subplots(len(types), per_type, figsize=(s["figure"]["width_double"], 1.55 * len(types) + 0.6))
+    seen_malls: set = set()
     for r, lt in enumerate(types):
         pool = [x for x in samples if x.layout_type and x.layout_type.value == lt and 12 <= x.target.num_nodes <= 45 and nx.number_connected_components(to_networkx(x.target)) == 1]
-        idx = rng.choice(len(pool), size=min(per_type, len(pool)), replace=False) if pool else []
+        if len(pool) < per_type:  # sparse types: relax the size filter rather than leaving panels empty
+            pool = [x for x in samples if x.layout_type and x.layout_type.value == lt and 8 <= x.target.num_nodes <= 60 and nx.number_connected_components(to_networkx(x.target)) == 1]
+        # de-duplicate floors of the same mall / identical graphs so the row shows variety
+        uniq, keys = [], set()
+        for x in pool:
+            k = (x.target.num_nodes, x.target.num_edges, getattr(x, "city", None))
+            if k not in keys:
+                keys.add(k); uniq.append(x)
+        idx = rng.choice(len(uniq), size=min(per_type, len(uniq)), replace=False) if uniq else []
         for c in range(per_type):
             ax = axes[r, c]
             if c < len(idx):
-                g = to_networkx(pool[idx[c]].target)
+                g = to_networkx(uniq[idx[c]].target)
                 draw_topology(ax, g, set(), title=f"{g.number_of_nodes()} 单元 / {g.number_of_edges()} 连接", seed=c, node_scale=0.8)
             else:
                 ax.axis("off")
-        axes[r, 0].text(-0.1, 0.5, lt, transform=axes[r, 0].transAxes, ha="right", va="center", fontsize=s["fonts"]["size_label"], fontweight="bold", rotation=90)
+                ax.text(0.5, 0.5, "（该类型可用样本不足）", ha="center", va="center", transform=ax.transAxes, fontsize=s["fonts"]["size_annot"], color="#999")
+        axes[r, 0].text(-0.04, 0.5, lt, transform=axes[r, 0].transAxes, ha="right", va="center", fontsize=s["fonts"]["size_label"], fontweight="bold", rotation=90)
     f.suptitle(title_for("F08") + "  — 节点 = 店铺 / 走廊段 / 中庭等空间单元，连线 = 直接相邻可达", x=0.02, ha="left", fontweight="bold")
-    f.tight_layout(rect=(0, 0, 1, 0.98))
+    f.tight_layout(rect=(0.03, 0, 1, 0.97))
     return savefig(f, out, "F08_layout_type_gallery")
 
 
@@ -465,8 +504,9 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     gens = svc.generate(proto.prototype_id, SiteBoundary.rectangle(180, 120), ConstraintSet(target_num_nodes=n_t, target_num_shops=n_t, shop_area_min=60, shop_area_max=300), n_candidates=1, seed=0)
     layout, ev = gens[0]
 
-    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 8.2))
-    gs = f.add_gridspec(3, 10, height_ratios=[1.0, 0.95, 1.55], hspace=0.75, wspace=0.6, left=0.04, right=0.98, top=0.93, bottom=0.07)
+    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 8.0))
+    # rows: (a)+(b) | caption band | (c) prototypes | caption band | (d)+(e)
+    gs = f.add_gridspec(5, 10, height_ratios=[1.05, 0.16, 0.85, 0.16, 1.6], hspace=0.35, wspace=0.6, left=0.04, right=0.98, top=0.93, bottom=0.08)
     # (a) conditions
     ax = f.add_subplot(gs[0, 0:3])
     ax.axis("off")
@@ -474,9 +514,9 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
         v = med[c]
         return f"{v:,.0f}" if v >= 100 else f"{v:.2f}"
     lines = [f"{label('conditions', c)}：{fmt(c)}" for c in db.query_cols]
-    ax.text(0, 1.02, "(a) 输入：待策划项目的外部条件", va="top", fontsize=s["fonts"]["size_label"], fontweight="bold")
-    ax.text(0, 0.86, f"（{label('clusters', '2')} 的中位条件）", va="top", fontsize=s["fonts"]["size_annot"], color="#555")
-    ax.text(0, 0.70, "\n".join(lines), va="top", fontsize=s["fonts"]["size_annot"], linespacing=1.5)
+    ax.text(0, 1.10, "(a) 输入：待策划项目的外部条件", va="top", fontsize=s["fonts"]["size_label"], fontweight="bold")
+    ax.text(0, 0.96, f"（{label('clusters', '2')} 的中位条件）", va="top", fontsize=s["fonts"]["size_annot"], color="#555")
+    ax.text(0, 0.84, "\n".join(lines), va="top", fontsize=s["fonts"]["size_annot"], linespacing=1.45)
     # (b) type ranking
     ax = f.add_subplot(gs[0, 4:10])
     if types:
@@ -493,26 +533,28 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
         ax.set_yticklabels([r.layout_type for r in rows])
         ax.invert_yaxis()
         ax.set_xlabel("期望综合评分（线段 = 80% 置信区间）")
-        ax.set_title(f"(b) 阶段一 ①：每种布局类型的预期评分 → 首选「{top_type}」", loc="left", fontsize=s["fonts"]["size_label"], fontweight="bold")
+        ax.set_title(f"(b) 阶段一 ①：每种布局类型的预期评分 → 首选「{top_type}」", loc="left", fontsize=s["fonts"]["size_label"], fontweight="bold", pad=8)
         ax.grid(axis="y", alpha=0)
     # (c) top-5 prototypes
     for i, r in enumerate(recs[:5]):
-        ax = f.add_subplot(gs[1, 2 * i : 2 * i + 2])
+        ax = f.add_subplot(gs[2, 2 * i : 2 * i + 2])
         g = db.get_graph(r.prototype_id)
         if g is None:
             ax.axis("off")
             continue
         sim = f"\n相似度 {r.similarity:.2f}" if r.similarity is not None else ""
         draw_topology(ax, to_networkx(g), set(), title=f"#{r.rank}  评分 {r.quality_score:.2f}{sim}", seed=i, node_scale=0.75)
-    # row caption: an invisible axis spanning the row, title only (never collides with (a)/(b))
-    cap = f.add_subplot(gs[1, :])
-    cap.axis("off")
-    cap.set_title(f"(c) 阶段一 ②–④：「{top_type}」内检索到的 Top-5 可比案例原型（同类城市 · 同面积档 · 其他商场；按预测质量排序）", loc="left", fontsize=s["fonts"]["size_label"], fontweight="bold", pad=26)
+    # row captions live in dedicated spacer rows (never collide with panel titles)
+    for row, txt in ((1, f"(c) 阶段一 ②–④：「{top_type}」内检索到的 Top-5 可比案例原型（同类城市 · 同面积档 · 其他商场；按预测质量排序）"),
+                     (3, f"(d) 阶段二 ⑤：以 #1 为骨架扩展到 {layout.topology.num_nodes} 单元（大纲 5 项判据：{'全部合格' if ev.overall_pass else '未全部合格'}）　　(e) 阶段二 ⑥–⑦：180 m × 120 m 场地内的平面布局草案")):
+        cap = f.add_subplot(gs[row, :])
+        cap.axis("off")
+        cap.text(0, 0.0, txt, ha="left", va="bottom", transform=cap.transAxes, fontsize=s["fonts"]["size_label"], fontweight="bold")
     # (d) generated topology + (e) plan
-    ax = f.add_subplot(gs[2, 0:4])
+    ax = f.add_subplot(gs[4, 0:4])
     sk = db.get_graph(proto.prototype_id)
-    draw_topology(ax, to_networkx(layout.topology), set(sk.nodes), title=f"(d) 阶段二 ⑤：以 #1 为骨架扩展到 {layout.topology.num_nodes} 单元\n大纲 5 项判据：{'全部合格' if ev.overall_pass else '未全部合格'}", seed=0)
-    ax = f.add_subplot(gs[2, 4:10])
+    draw_topology(ax, to_networkx(layout.topology), set(sk.nodes), title="黑 = 原型骨架，白 = 新增单元", seed=0)
+    ax = f.add_subplot(gs[4, 4:10])
     ax.add_patch(MplPolygon(layout.boundary.exterior, closed=True, facecolor="#FAFAFA", edgecolor="#333", lw=1.4))
     kinds = {"shop": "#CFE8FF", "anchor": "#DCD6F7", "corridor": "#F0C987", "atrium": "#B5E7A0", "junction": "#222", "entrance": "#D9480F"}
     for u in layout.units:
@@ -526,7 +568,7 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     ax.autoscale()
     ax.axis("off")
     n_shop = sum(1 for u in layout.units if u.kind == "shop")
-    ax.set_title(f"(e) 阶段二 ⑥–⑦：180 m × 120 m 场地内的平面布局草案（{n_shop} 个店铺单元）", loc="left", fontsize=s["fonts"]["size_label"], fontweight="bold")
+    ax.set_title(f"{n_shop} 个店铺单元 · 走廊沿拓扑连接展开", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
     from matplotlib.patches import Patch
     f.legend(handles=[Patch(facecolor=v, edgecolor="#666", label=k2) for k2, v in [("店铺", kinds["shop"]), ("主力店", kinds["anchor"]), ("走廊", kinds["corridor"]), ("中庭", kinds["atrium"])]] + [plt.Line2D([], [], color="#D9480F", lw=1.2, label="拓扑连接")], loc="lower center", ncol=5, bbox_to_anchor=(0.5, 0.005), fontsize=s["fonts"]["size_annot"])
     f.suptitle(title_for("F09") + ("" if is_real else "（合成数据演示；本机运行时自动使用真实案例库）"), x=0.02, ha="left", fontweight="bold")
@@ -556,19 +598,21 @@ def f10_retrieval_evidence(results: Path, out: Path) -> list[Path]:
     def z(r):
         return ((np.log1p(pd.Series({c: float(r[c]) for c in cols}).clip(lower=0)) - mu) / sd).values
     zq = z(row)
-    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.1, 4.6))
-    gs = f.add_gridspec(2, 4, height_ratios=[1, 1.15], wspace=0.25, hspace=0.35)
-    # top row: query real topology (this floor's actual) + 3 retrieved
+    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.1, 5.2))
+    gs = f.add_gridspec(2, 4, height_ratios=[1, 1.2], wspace=0.3, hspace=0.55, left=0.09, right=0.98, top=0.86, bottom=0.14)
+    # top row: query real topology (this floor's actual) + 3 retrieved; three short title lines each
     gq = db.get_graph(row[db.id_col])
     ax = f.add_subplot(gs[0, 0])
     if gq is not None:
-        draw_topology(ax, to_networkx(gq), set(), title=f"待策划项目（真实建成，仅作对照）\n{row.get('layout_type', '')} · 评分 {row[db.label_col]:.2f}", seed=0, node_scale=0.7)
+        draw_topology(ax, to_networkx(gq), set(), title=f"待策划项目\n（真实建成，仅作对照）\n{row.get('layout_type', '')} · 评分 {row[db.label_col]:.2f}", seed=0, node_scale=0.7)
     for i, r in enumerate(recs):
         ax = f.add_subplot(gs[0, i + 1])
         g = db.get_graph(r.prototype_id)
         rr = df[df[db.id_col] == r.prototype_id].iloc[0]
         if g is not None:
-            draw_topology(ax, to_networkx(g), set(), title=f"推荐 #{r.rank}：{r.layout_type.value if r.layout_type else ''} · 评分 {r.quality_score:.2f}\n{rr.get('cityname', '')} · {rr['total_area']/1e4:.1f} 万 m$^2$", seed=i, node_scale=0.7)
+            city = str(rr.get("cityname", "") or "").strip()
+            line3 = (city + " · " if city else "") + f"{rr['total_area']/1e4:.1f} 万 m$^2$"
+            draw_topology(ax, to_networkx(g), set(), title=f"推荐 #{r.rank}\n{r.layout_type.value if r.layout_type else ''} · 评分 {r.quality_score:.2f}\n{line3}", seed=i, node_scale=0.7)
     # bottom: condition profile
     ax = f.add_subplot(gs[1, :])
     x = np.arange(len(cols))
@@ -579,10 +623,15 @@ def f10_retrieval_evidence(results: Path, out: Path) -> list[Path]:
         ax.bar(x + (i - 0.5) * w, z(rr), w, color=s["palette"]["main"][i], label=f"推荐 #{r.rank}")
     ax.axhline(0, color="#444", lw=0.8)
     ax.set_xticks(x)
-    ax.set_xticklabels([label("conditions", c) for c in cols], rotation=18, ha="right")
+    def _wrap(t: str, w: int = 5) -> str:
+        t = t.replace(" ", "")
+        return t if len(t) <= w else "\n".join(t[i : i + w] for i in range(0, len(t), w))
+    ax.set_xticklabels([_wrap(label("conditions", c)) for c in cols], fontsize=s["fonts"]["size_annot"], linespacing=1.1)
     ax.set_ylabel("标准化后的条件值\n（0 = 全库平均）")
-    ax.legend(ncol=4, fontsize=s["fonts"]["size_annot"], loc="upper right")
-    ax.set_title("各项外部条件的对比：推荐案例在多数条件上与待策划项目接近（这就是“可比”的含义），差异较大的条件会在解释中标注为风险", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
+    ymax = max(abs(zq).max(), max(abs(z(df[df[db.id_col] == r.prototype_id].iloc[0])).max() for r in recs))
+    ax.set_ylim(-ymax * 1.15, ymax * 1.55)  # head-room so the legend never sits on a bar
+    ax.legend(ncol=4, fontsize=s["fonts"]["size_annot"], loc="upper left", frameon=False)
+    ax.set_title("各项外部条件的对比：推荐案例在多数条件上与待策划项目接近（即“可比”）；差异大的条件会在解释中标为风险", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5, pad=6)
     f.suptitle(title_for("F10") + ("" if is_real else "（合成数据演示）"), x=0.02, ha="left", fontweight="bold")
     return savefig(f, out, "F10_retrieval_evidence")
 

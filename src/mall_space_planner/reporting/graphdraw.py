@@ -126,7 +126,7 @@ def full_layout(full: nx.Graph, skeleton_nodes: set, sk_pos: dict, seed: int = 0
 
 
 # --------------------------------------------------------------------------- drawing
-def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | None = None, *, sk_pos: dict | None = None, pos: dict | None = None, title: str = "", highlight_edges=None, labels: bool = False, seed: int = 0, node_scale: float = 1.0, size_ref_n: int | None = None, frame: tuple | None = None) -> dict:
+def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | None = None, *, sk_pos: dict | None = None, pos: dict | None = None, title: str = "", highlight_edges=None, labels: bool = False, seed: int = 0, node_scale: float = 1.0, size_ref_n: int | None = None, frame: tuple | None = None, title_loc: str = "center", title_pad: float = 4) -> dict:
     """Draw one topology. Provide ``sk_pos`` (shared skeleton positions) or full ``pos``.
 
     Returns the positions used so callers can reuse them for the next panel.
@@ -155,11 +155,15 @@ def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | Non
     else:
         ax.set_xlim(P[:, 0].min() - pad, P[:, 0].max() + pad)
         ax.set_ylim(P[:, 1].min() - pad, P[:, 1].max() + pad)
-    ax.set_aspect("equal")
+    # ``datalim``: keep the axes box fixed (so titles of neighbouring panels align) and widen the data
+    # limits instead of shrinking the box.
+    ax.set_aspect("equal", adjustable="datalim")
     ax.axis("off")
     ax.figure.canvas.draw()  # to get axis size in pixels
     bbox = ax.get_window_extent()
-    px_per_data = bbox.width / (ax.get_xlim()[1] - ax.get_xlim()[0])
+    xr = ax.get_xlim()[1] - ax.get_xlim()[0]
+    yr = ax.get_ylim()[1] - ax.get_ylim()[0]
+    px_per_data = min(bbox.width / xr, bbox.height / yr)  # effective scale under equal aspect
     pt_per_px = 72.0 / ax.figure.dpi
     r_pt = r_data * px_per_data * pt_per_px
     size_sk = (2 * r_pt) ** 2
@@ -182,8 +186,14 @@ def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | Non
         for v in g.nodes:
             ax.text(pos[v][0], pos[v][1], v, ha="center", va="center", fontsize=max(4, min(7, r_pt * 0.9)), color="white" if v in sk else dark, zorder=5)
     if title:
-        ax.set_title(title, fontsize=s["fonts"]["size_annot"] + 0.5, loc="left", pad=3)
+        ax.set_title(title, fontsize=s["fonts"]["size_annot"] + 0.5, loc=title_loc, pad=title_pad)
     return pos
+
+
+def frame_of(*pos_dicts: dict) -> tuple:
+    """Union bounding box of several position dicts -> ``((x0, x1), (y0, y1))`` for ``draw_topology(frame=...)``."""
+    P = np.array([xy for d in pos_dicts for xy in d.values()], float)
+    return (P[:, 0].min(), P[:, 0].max()), (P[:, 1].min(), P[:, 1].max())
 
 
 def legend_handles():

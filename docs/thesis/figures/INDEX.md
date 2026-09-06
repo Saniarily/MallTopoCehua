@@ -1,27 +1,4 @@
 # 图目录
 
-- **F01** 两阶段智能策划框架总览 — `outputs/thesis/figures/F01_framework_overview.png`
-- **F02** 案例库数据概况 — `outputs/thesis/figures/F02_data_overview.png`
-- **F03** 策划条件与商场评分的相关性 — `outputs/thesis/figures/F03_condition_score_correlation.png`
-- **F04** 无泄漏的数据划分方式 — `outputs/thesis/figures/F04_split_protocol.png`
-- **F05** 阶段一：从策划条件到可比案例的检索流程 — `outputs/thesis/figures/F05_retrieval_funnel.png`
 - **F06** 阶段二：骨架 → 生成拓扑 → 真实拓扑 示例 — `outputs/thesis/figures/F06_generation_examples.png`
 - **F06** 阶段二：骨架 → 生成拓扑 → 真实拓扑 示例 — `outputs/thesis/figures/F06b_generation_gallery_1.png`
-- **F07** 自回归生成过程逐步示意 — `outputs/thesis/figures/F07_autoregressive_steps.png`
-- **F08** 六种布局类型的真实平面拓扑示例 — `outputs/thesis/figures/F08_layout_type_gallery.png`
-- **F09** 端到端工作示例：从策划条件到平面布局草案 — `outputs/thesis/figures/F09_worked_example.png`
-- **F10** 阶段一检索证据：待策划项目与推荐案例的条件对比 — `outputs/thesis/figures/F10_retrieval_evidence.png`
-- **R01** 阶段一：不同排序方法的推荐质量比较 — `outputs/thesis/figures/R01_stage1_model_comparison.png`
-- **R02** 阶段一：多指标比较 — `outputs/thesis/figures/R02_stage1_multi_metric.png`
-- **R03** 阶段一：特征块消融 — `outputs/thesis/figures/R03_stage1_feature_block_ablation.png`
-- **R04** 阶段一：深度模型成分消融 — `outputs/thesis/figures/R04_stage1_deep_ablation.png`
-- **R05** 阶段一：各类城市下不同布局类型的期望评分 — `outputs/thesis/figures/R05_stage1_type_expected_score_by_cluster.png`
-- **R06** 阶段一：布局类型模型的增量价值与决策收益 — `outputs/thesis/figures/R06_stage1_type_model_value.png`
-- **R07** 阶段一：推荐原型与真实建成类型的一致性 — `outputs/thesis/figures/R07_stage1_prototype_fidelity.png`
-- **R08** 策划条件对布局类型的可预测性 — `outputs/thesis/figures/R08_layout_type_predictability.png`
-- **R09** 阶段二：各生成方法综合比较 — `outputs/thesis/figures/R09_stage2_overview.png`
-- **R10** 阶段二：分支位置召回率 vs 正确率 — `outputs/thesis/figures/R10_stage2_attach_recall_precision.png`
-- **R11** 阶段二：解码策略的权衡 — `outputs/thesis/figures/R11_stage2_decoding_tradeoff.png`
-- **R12** 阶段二：自回归图网络成分消融 — `outputs/thesis/figures/R12_stage2_ar_gnn_ablation.png`
-- **R13** 阶段二：训练曲线 — `outputs/thesis/figures/R13_stage2_training_curves.png`
-- **R14** 阶段二：生长模式与真实拓扑的一致性 — `outputs/thesis/figures/R14_stage2_growth_pattern.png`

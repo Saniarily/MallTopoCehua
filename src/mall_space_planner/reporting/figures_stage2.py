@@ -42,13 +42,15 @@ def r09_overview(results: Path, out: Path) -> list[Path]:
             vals, errs = vals * 100, errs * 100
         cols = [color_for(r) for r in rows]
         ax.bar(range(len(rows)), vals, yerr=errs, color=cols, edgecolor="white", capsize=3, width=0.66, error_kw={"lw": 0.8})
-        for i, v in enumerate(vals):
-            ax.text(i, v + (max(vals) * 0.015), f"{v:.1f}" if v >= 10 else f"{v:.2f}", ha="center", fontsize=s["fonts"]["size_annot"])
+        top = max(vals + errs)
+        for i, (v, e) in enumerate(zip(vals, errs)):
+            # place the value above the error-bar cap, never through it
+            ax.text(i, v + e + top * 0.03, f"{v:.1f}" if v >= 10 else f"{v:.2f}", ha="center", va="bottom", fontsize=s["fonts"]["size_annot"])
         ax.set_title(("合格率 (%)" if m == "overall_pass" else label("metrics", m)) + f"  {b}", fontsize=s["fonts"]["size_label"])
         ax.set_xticks(range(len(rows)))
         ax.set_xticklabels(["真实", "规则", "规则\n+择优", "本文", "本文\n+择优"], fontsize=s["fonts"]["size_annot"])
         ax.grid(axis="x", alpha=0)
-        ax.set_ylim(0, max(vals + errs) * 1.22)
+        ax.set_ylim(0, top * 1.25)
     f.suptitle(title_for("R09") + "（600 个留出骨架，3 次随机种子）", x=0.02, ha="left", fontweight="bold")
     f.tight_layout()
     return savefig(f, out, "R09_stage2_overview")
@@ -64,11 +66,25 @@ def r10_attach_scatter(results: Path, out: Path) -> list[Path]:
         if name == "ref_ground_truth":
             continue
         ax.scatter(g["attach_recall_pct"], g["attach_precision_pct"], s=18 + 140 * (g["overall_pass"] - 0.7).clip(0, 1), color=color_for(name), alpha=0.85, edgecolor="white", lw=0.5, label=_short(name))
-    ann = {"stage2_rule_baseline": (6, -10), "stage2_search_baseline": (6, 6), "stage2_ar_gnn_greedy": (6, 4), "stage2_ar_gnn": (-8, 12), "stage2_ar_gnn_bestof16": (6, -14), "stage2_ar_gnn_long": (6, 10), "stage2_ar_gnn_bfs_order": (6, 2), "stage2_ar_gnn_basic_feats": (6, -12), "stage2_ar_gnn_single_label": (-6, -14)}
-    for name, off in ann.items():
+    # Labels are placed in free space (data coords) with a thin leader line to the mean position, so
+    # they never sit on top of each other or on top of points.
+    ann = {
+        "stage2_rule_baseline": (44.5, 39.0, "left"),
+        "stage2_search_baseline": (46.5, 45.5, "left"),
+        "stage2_ar_gnn_greedy": (42.0, 87.5, "left"),
+        "stage2_ar_gnn": (52.0, 82.5, "right"),
+        "stage2_ar_gnn_bestof16": (57.0, 68.5, "left"),
+        "stage2_ar_gnn_long": (66.0, 82.5, "center"),
+        "stage2_ar_gnn_bfs_order": (68.5, 79.5, "right"),
+        "stage2_ar_gnn_basic_feats": (68.5, 69.0, "right"),
+        "stage2_ar_gnn_single_label": (49.0, 72.5, "left"),
+    }
+    for name, (tx, ty, ha) in ann.items():
         if name not in df.index:
             continue
-        ax.annotate(_short(name).split("（")[0].replace("自回归图网络", "本文").replace("消融：", ""), (df.loc[name, "attach_recall_pct_mean"], df.loc[name, "attach_precision_pct_mean"]), xytext=off, textcoords="offset points", fontsize=s["fonts"]["size_annot"], color="#333", ha="left" if off[0] > 0 else "right")
+        txt = _short(name).split("（")[0].replace("自回归图网络", "本文").replace("消融：", "")
+        ax.annotate(txt, (df.loc[name, "attach_recall_pct_mean"], df.loc[name, "attach_precision_pct_mean"]), xytext=(tx, ty), textcoords="data", fontsize=s["fonts"]["size_annot"], color="#333", ha=ha, va="center",
+                    arrowprops={"arrowstyle": "-", "color": "#999", "lw": 0.6, "shrinkB": 4})
     ax.set_xlabel(label("metrics", "attach_recall_pct") + "  — 真实分支位置被找到的比例")
     ax.set_ylabel(label("metrics", "attach_precision_pct") + "  — 生成分支位置正确的比例")
     ax.set_title(title_for("R10") + "（点越大 = 大纲合格率越高）", loc="left", fontweight="bold")
@@ -90,12 +106,12 @@ def r11_decoding_tradeoff(results: Path, out: Path) -> list[Path]:
     b1 = ax.bar(x - w / 2, df.loc[rows, "overall_pass_mean"] * 100, w, yerr=df.loc[rows, "overall_pass_std"] * 100, color=s["palette"]["ours"], edgecolor="white", capsize=3, label="大纲合格率 (%)")
     b2 = ax2.bar(x + w / 2, df.loc[rows, "aspl_deviation_pct_mean"], w, yerr=df.loc[rows, "aspl_deviation_pct_std"], color=s["palette"]["main"][1], edgecolor="white", capsize=3, label="平均步行路径偏差 (%)")
     ax.plot(x, df.loc[rows, "attach_precision_pct_mean"], "D-", color=s["palette"]["highlight"], ms=6, lw=1.4, label="分支位置正确率 (%)")
-    ax.set_ylim(0, 105)
-    ax2.set_ylim(0, 40)
+    ax.set_ylim(0, 128)  # head-room for the legend above the bars
+    ax2.set_ylim(0, 48)
     ax2.grid(False)
     ax2.spines["right"].set_visible(True)
     ax.set_xticks(x)
-    ax.set_xticklabels([_short(r).replace("自回归图网络", "本文").replace("（本文推荐）", "") for r in rows], rotation=12, ha="right")
+    ax.set_xticklabels([_short(r).replace("自回归图网络（本文）", "本文").replace("自回归图网络", "本文").replace("（本文推荐）", "") for r in rows], rotation=12, ha="right")
     ax.set_ylabel("合格率 / 分支正确率 (%)")
     ax2.set_ylabel("平均步行路径偏差 (%)")
     h1, l1 = ax.get_legend_handles_labels()
@@ -119,7 +135,7 @@ def r12_ablation(results: Path, out: Path) -> list[Path]:
         ax.barh(y, vals, xerr=errs, color=cols, edgecolor="white", capsize=3, height=0.62)
         for yy, v, e in zip(y, vals, errs):
             ax.text(v + e + (0.01 if m == "degree_emd" else 0.6), yy, f"{v:.2f}" if m == "degree_emd" else f"{v:.1f}", va="center", fontsize=s["fonts"]["size_annot"])
-        ax.set_title(label("metrics", m) + f" {b}", fontsize=s["fonts"]["size_label"])
+        ax.set_title(label("metrics", m).replace(" (", "\n(") + f" {b}", fontsize=s["fonts"]["size_label"], linespacing=1.15)
         ax.grid(axis="y", alpha=0)
         lo = min(vals - errs)
         hi = max(vals + errs)
