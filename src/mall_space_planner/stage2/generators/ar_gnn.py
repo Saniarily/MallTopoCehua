@@ -152,8 +152,12 @@ def _rwse(adj: np.ndarray, k: int) -> np.ndarray:
     return np.stack(out, 1).astype(np.float32)
 
 
-def state_features(present: list[str], edges: list[tuple[str, str]], skeleton_nodes: set[str], added_at: dict[str, int], k: int, n_target: int, layout_oh: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Node features [n, NODE_DIM], edge index [2, 2E], context [CTX_DIM] for the state before step k."""
+def state_features(present: list[str], edges: list[tuple[str, str]], skeleton_nodes: set[str], added_at: dict[str, int], k: int, n_target: int, layout_oh: np.ndarray, feature_set: str = "full") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Node features [n, NODE_DIM], edge index [2, 2E], context [CTX_DIM] for the state before step k.
+
+    ``feature_set="basic"`` keeps only the v1 features (log degree, clustering, is_skeleton, is_new, t/N) and
+    zeroes the structural block + RWSE — used as an ablation.
+    """
     n = len(present)
     idx = {v: i for i, v in enumerate(present)}
     adj = np.zeros((n, n), np.float32)
@@ -192,7 +196,11 @@ def state_features(present: list[str], edges: list[tuple[str, str]], skeleton_no
         np.log1p(sk_deg), np.log1p(new_nbrs), (deg == 1).astype(np.float32), deg / max(1.0, deg.max()),
         (deg == 0).astype(np.float32),
     ], 1).astype(np.float32)
-    x = np.concatenate([x, _rwse(adj, RWSE_K), np.tile(layout_oh, (n, 1))], 1)
+    rw = _rwse(adj, RWSE_K)
+    if feature_set == "basic":
+        x[:, 5:] = 0.0
+        rw = np.zeros_like(rw)
+    x = np.concatenate([x, rw, np.tile(layout_oh, (n, 1))], 1)
     src = [idx[u] for u, v in edges] + [idx[v] for u, v in edges]
     dst = [idx[v] for u, v in edges] + [idx[u] for u, v in edges]
     ei = np.array([src, dst], np.int64) if src else np.zeros((2, 0), np.int64)
@@ -309,12 +317,16 @@ class ARGNNExpander(BaseTopologyGenerator):
         order: str = "label",
         batch_steps: int = 64,
         second_from_valid_only: bool = True,
+        loss_mode: str = "set",
+        feature_set: str = "full",
     ) -> None:
+        """``loss_mode``: ``set`` = -log Σ_{valid} p (v2) | ``single`` = CE on the first valid anchor only (v1 ablation)."""
         self.hp = dict(d_model=d_model, n_layers=n_layers, dropout=dropout)
         self.lr, self.weight_decay, self.epochs, self.patience, self.label_smoothing = lr, weight_decay, epochs, patience, label_smoothing
         self.max_train_samples, self.val_fraction, self.ensemble_k = max_train_samples, val_fraction, ensemble_k
         self.temperature, self.best_of, self.w_aspl, self.device_pref, self.seed, self.label_style = temperature, best_of, w_aspl, device, seed, label_style
         self.order, self.batch_steps, self.second_from_valid_only = order, batch_steps, second_from_valid_only
+        self.loss_mode, self.feature_set = loss_mode, feature_set
         self.states_: list[dict] = []
         self.history_: dict[str, list[float]] = {"train_loss": [], "val_anchor_acc": [], "val_has2_acc": [], "val_anchor_top3": []}
         self._model = None
@@ -334,9 +346,8 @@ class ARGNNExpander(BaseTopologyGenerator):
         return self._model
 
     # ------------------------------------------------------------------ data
-    @staticmethod
-    def _materialise(sample: ExpansionSample, step: dict[str, Any]) -> dict[str, Any]:
-        x, ei, ctx = state_features(step["present"], step["edges"], set(sample.skeleton.nodes), step["added_at"], step["k"], sample.target.num_nodes, _layout_onehot(sample.layout_type))
+    def _materialise(self, sample: ExpansionSample, step: dict[str, Any]) -> dict[str, Any]:
+        x, ei, ctx = state_features(step["present"], step["edges"], set(sample.skeleton.nodes), step["added_at"], step["k"], sample.target.num_nodes, _layout_onehot(sample.layout_type), self.feature_set)
         return {"x": x, "ei": ei, "ctx": ctx, "valid": np.array(step["valid"], np.int64), "n": len(step["present"])}
 
     def _collate(self, items: list[dict[str, Any]], torch, device):  # noqa: ANN001, ANN202
@@ -387,7 +398,12 @@ class ARGNNExpander(BaseTopologyGenerator):
                 B = len(items)
                 a_logits, has2, s_logits = model(x, ei, ctx, batch, B, anchor_idx=a_idx)
                 n_valid = torch.tensor([len(it["valid"]) for it in items], device=device)
-                loss = set_nll(a_logits, batch, B, vmask > 0.5, self.label_smoothing) + bce(has2, (n_valid >= 2).float())
+                if self.loss_mode == "single":  # v1-style: only the first valid anchor counts as correct
+                    single = torch.zeros_like(vmask)
+                    single[a_idx] = 1.0
+                    loss = set_nll(a_logits, batch, B, single > 0.5, self.label_smoothing) + bce(has2, (n_valid >= 2).float())
+                else:
+                    loss = set_nll(a_logits, batch, B, vmask > 0.5, self.label_smoothing) + bce(has2, (n_valid >= 2).float())
                 two = n_valid >= 2
                 if bool(two.any()):
                     v2 = vmask.clone()
@@ -463,7 +479,7 @@ class ARGNNExpander(BaseTopologyGenerator):
         k = 1
         with torch.no_grad():
             while len(present) < n_target:
-                x, ei, ctx = state_features(present, edges, sk_nodes, added_at, k, n_target, layout_oh)
+                x, ei, ctx = state_features(present, edges, sk_nodes, added_at, k, n_target, layout_oh, self.feature_set)
                 x_t, ei_t, ctx_t = torch.tensor(x, device=device), torch.tensor(ei, device=device), torch.tensor(ctx[None], device=device)
                 batch = torch.zeros(len(present), dtype=torch.long, device=device)
                 a_acc = sum(m(x_t, ei_t, ctx_t, batch, 1, anchor_idx=torch.zeros(1, dtype=torch.long, device=device))[0] for m in models)
@@ -520,7 +536,7 @@ class ARGNNExpander(BaseTopologyGenerator):
         torch = _torch()
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        meta = {"hp": self.hp, "history": self.history_, "n_states": len(self.states_), "order": self.order, "feat_version": FEAT_VERSION}
+        meta = {"hp": self.hp, "history": self.history_, "n_states": len(self.states_), "order": self.order, "feat_version": FEAT_VERSION, "loss_mode": self.loss_mode, "feature_set": self.feature_set}
         torch.save({"states": self.states_, "seed": self.seed, **meta}, path / "ar_gnn.pt")
         (path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return path
@@ -532,5 +548,7 @@ class ARGNNExpander(BaseTopologyGenerator):
             raise ValueError(f"checkpoint {path} was trained with feature version {blob.get('feat_version', 1)}; retrain with scripts/train_stage2.py")
         self.hp, self.states_, self.history_ = blob["hp"], blob["states"], blob.get("history", self.history_)
         self.order = blob.get("order", self.order)
+        self.feature_set = blob.get("feature_set", self.feature_set)
+        self.loss_mode = blob.get("loss_mode", self.loss_mode)
         self._model, self._ens = None, []
         return self
