@@ -172,6 +172,26 @@ def evaluate_type_recommender(rec: TreeTypeRecommender, db: CaseDatabase, split:
         match = g["layout_type"].astype(str) == g["_rec_type"]
         per_cluster.append({"cluster": c, "n": int(len(g)), "kendall_tau_type_order": tau, "empirical_best_type": str(emp.idxmax()), "recommended_best_type": str(pm[common].idxmax()) if common else None, "score_when_type_matches_rec": float(g.loc[match, db.label_col].mean()) if match.any() else np.nan, "score_when_type_differs": float(g.loc[~match, db.label_col].mean()) if (~match).any() else np.nan, "n_match": int(match.sum())})
     out["per_cluster"] = per_cluster
+    # per-cluster type table: model E[score | cluster conditions, type] (mean over the cluster's test floors,
+    # 10-90% bootstrap CI) next to the empirical mean/n of floors that actually have that type. This is the
+    # paper-facing table: it shows *which* type differences are resolvable and which are within CI overlap.
+    all_boot = rec.predict_all(te)  # [n, types, boot]
+    type_tables = {}
+    for c, g in te.groupby(rec.cluster_col_):
+        rows = []
+        boot_mean = all_boot[g.index].mean(0)  # [types, boot]
+        emp = g.groupby("layout_type")[db.label_col].agg(["mean", "size", "std"])
+        for j, ty in enumerate(rec.types):
+            e = emp.loc[ty] if ty in emp.index else None
+            rows.append({"layout_type": ty, "expected_score": float(boot_mean[j].mean()), "ci_low": float(np.percentile(boot_mean[j], 10)), "ci_high": float(np.percentile(boot_mean[j], 90)),
+                         "empirical_mean": None if e is None else float(e["mean"]), "empirical_n": 0 if e is None else int(e["size"]), "empirical_std": None if e is None or np.isnan(e["std"]) else float(e["std"])})
+        rows.sort(key=lambda r: -r["expected_score"])
+        for r_i, r in enumerate(rows):
+            r["rank"] = r_i + 1
+        type_tables[str(c)] = rows
+    out["type_tables"] = type_tables
+    # how often is the model's top type distinguishable from the runner-up (CI non-overlap)?
+    out["top1_separable_rate"] = float(np.mean([tt[0]["ci_low"] > tt[1]["ci_high"] for tt in type_tables.values() if len(tt) >= 2])) if type_tables else np.nan
     taus = [p["kendall_tau_type_order"] for p in per_cluster if not np.isnan(p["kendall_tau_type_order"])]
     out["mean_kendall_tau_type_order"] = float(np.mean(taus)) if taus else np.nan
     m = te["layout_type"].astype(str) == te["_rec_type"]

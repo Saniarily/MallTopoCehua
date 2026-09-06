@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Round 3 (Phase 4) experiments on the REAL data (Mac M4 Pro, conda env `mallranker`).
 #
-#   CORPUS=/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/MallTopoCehua/sharegpt_data.json \
-#   bash scripts/run_real_data_phase4.sh
+#   bash scripts/run_real_data_phase4.sh                 # corpus path read from configs/data/legacy(.local).yaml sharegpt_json
+#   SKIP_S1=1 bash scripts/run_real_data_phase4.sh       # stage-2 only (AR-GNN training + 4-way comparison)
+#   CORPUS=/path/to/sharegpt_data.json bash scripts/run_real_data_phase4.sh   # explicit corpus
 #
 # Optional env: S2_LIMIT=600 (stage-2 holdout size to evaluate), DEVICE=auto|cpu|mps for the AR-GNN
 #               (auto = CUDA else CPU; MPS is opt-in and enables the CPU fallback for unsupported ops),
@@ -32,7 +33,19 @@ if [[ "${SKIP_S1:-0}" != "1" ]]; then
 fi
 
 if [[ "${SKIP_S2:-0}" != "1" ]]; then
-  if [[ -z "$CORPUS" ]]; then echo "!! set CORPUS=/path/to/sharegpt_data.json for stage-2 experiments"; exit 2; fi
+  # corpus: $CORPUS env > configs/data/legacy.local.yaml > configs/data/legacy.yaml (sharegpt_json)
+  if [[ -z "$CORPUS" ]]; then
+    CORPUS=$(python - <<'PY'
+import sys; sys.path.insert(0, "src")
+from mall_space_planner.utils import resolve_config
+print(resolve_config("configs/data/legacy.yaml").get("sharegpt_json") or "")
+PY
+)
+  fi
+  if [[ -z "$CORPUS" || ! -f "$CORPUS" ]]; then
+    echo "!! stage-2 corpus not found (CORPUS='$CORPUS'). Set CORPUS=/path/to/sharegpt_data.json or sharegpt_json in configs/data/legacy.local.yaml"; exit 2
+  fi
+  echo "== stage-2 corpus: $CORPUS =="
   S2_OUT=outputs/experiments/stage2_eval_r3
   echo "== [S2-A] train AR-GNN on corpus minus last 600 (holdout) =="
   python scripts/train_stage2.py --config configs/stage2/ar_gnn.yaml --corpus "$CORPUS" \

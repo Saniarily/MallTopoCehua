@@ -17,7 +17,16 @@ def main() -> None:
         seed_everything(seed); rec = TreeTypeRecommender(**{**params, "seed": seed}).fit(db, db.split("train")); r = evaluate_type_recommender(rec, db); r["seed"] = seed; results.append(r)
         print(f"[seed {seed}] rmse type/cond={r['rmse_with_type']:.4f}/{r['rmse_conditions_only']:.4f} spearman type/cond={r['spearman_with_type']:.3f}/{r['spearman_conditions_only']:.3f} tau_type_order={r['mean_kendall_tau_type_order']:.3f} best_type_agree={r['best_type_agreement_rate']:.2f} policy_uplift={r['policy_uplift']:.4f}")
     (out / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print("per-cluster (last seed):"); [print("  ", c) for c in results[-1]["per_cluster"]]; print(f"written: {out}")
+    # markdown: seed-averaged summary + per-cluster type tables (last seed; CI is bootstrap, not seed)
+    import numpy as np
+    keys = ["rmse_with_type", "rmse_conditions_only", "spearman_with_type", "spearman_conditions_only", "mean_kendall_tau_type_order", "best_type_agreement_rate", "top1_separable_rate", "policy_uplift"]
+    md = ["# Type-conditional quality model E[score | conditions, type]", "", f"seeds: {a.seeds}; test floors: {results[0]['n_test_floors']}, test malls: {results[0]['n_test_malls']}", "", "| metric | mean ± std over seeds |", "|---|---|"]
+    md += [f"| {k} | {np.mean([r[k] for r in results]):.4f} ± {np.std([r[k] for r in results]):.4f} |" for k in keys if all(k in r for r in results)]
+    for c, rows in results[-1].get("type_tables", {}).items():
+        md += ["", f"## cluster {c}", "", "| rank | layout_type | E[score] | 10-90% CI | empirical mean | n |", "|---|---|---|---|---|---|"]
+        md += [f"| {r['rank']} | {r['layout_type']} | {r['expected_score']:.3f} | [{r['ci_low']:.3f}, {r['ci_high']:.3f}] | {'-' if r['empirical_mean'] is None else format(r['empirical_mean'], '.3f')} | {r['empirical_n']} |" for r in rows]
+    (out / "summary.md").write_text("\n".join(md) + "\n", encoding="utf-8"); print("\n".join(md))
+    print(f"written: {out}")
 
 if __name__ == "__main__":
     main()
