@@ -20,10 +20,11 @@
 - 小样本技巧：特征噪声、节点 dropout、snapshot ensembling、早停；成分消融配置齐备。
 - 论文叙事：表格 MLP 失败 ≠ 深度无用；给出在 5k 样本级别让深度模型有效的设计原则。
 
-## 5. 自回归 GNN 的原型保持拓扑扩展（与规则/搜索方法同评估器对比）
-- 规则/搜索基线已满足大纲 5 指标，但**目标边召回 ≈ 骨架边占比**——统计像、结构不像；
-- AR-GNN 以 teacher forcing 学习真实扩展的连接模式：anchor / has2 / second 三头，骨架结构性保持；
-- 与 rule / search / AR-GNN / AR-GNN+best-of 在**同一 600 条留出**上比较：大纲指标 + 目标边召回/精度 + 推理时间。
+## 5. 自回归 GNN 的原型保持拓扑扩展（与规则/搜索方法同评估器对比）— 真实数据已验证
+- 规则/搜索基线满足大纲 5 指标（98%），但 **ground truth 自己只有 94.7%**：大纲指标是合格线而非目标；
+- AR-GNN v2：按语料生成顺序 teacher forcing、多合法锚点的集合似然、结构特征 + RWSE；骨架结构性保持；
+- 新增**无标签结构一致性指标**（attach recall/precision、degree EMD、new–new 比例）解决"新节点标签不可复现"的评估偏差；
+- 真实 600 条留出：attach precision **79.7 vs 43.2**（规则），degree EMD **0.24 vs 0.44**，生长模式与语料一致；best-of-16 同时满足大纲（96.2%）；与 search_expander 搜索预算相同 → 学习型 proposal 的净贡献。
 
 ## 6. 工程可复现性
 registry/factory + YAML 切换、`_base_` 继承与 `.local.yaml` 机器覆盖、run.json/多 seed 聚合/表格与图自动生成、合成数据 smoke 测试 36 项、真实数据一键脚本；旧仓库只读审计并记录其缺陷（泄漏、oracle 特征、失败的端到端深度模型）。

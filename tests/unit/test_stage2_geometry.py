@@ -34,3 +34,16 @@ def test_lshape_boundary_supported():
     poly = Polygon(b.exterior)
     assert all(poly.buffer(1e-6).contains(Polygon(u.polygon)) for u in lay.units if u.polygon)
     assert GeometryEvaluator().evaluate(lay, req.constraints).passed["inside_boundary"]
+
+
+def test_label_free_structural_metrics():
+    from mall_space_planner.schemas import TopologyGraph
+    from mall_space_planner.topology.metrics import attachment_overlap, degree_histogram_emd, new_new_edge_ratio
+    sk = TopologyGraph(adjacency={"A": ["B"], "B": ["A", "C"], "C": ["B"]})
+    tgt = TopologyGraph(adjacency={"A": ["B", "D"], "B": ["A", "C"], "C": ["B", "E"], "D": ["A", "F"], "E": ["C"], "F": ["D"]})
+    gen_same_structure_other_labels = TopologyGraph(adjacency={"A": ["B", "X"], "B": ["A", "C"], "C": ["B", "Y"], "X": ["A", "Z"], "Y": ["C"], "Z": ["X"]})
+    r, p = attachment_overlap(sk, tgt, gen_same_structure_other_labels); assert r == 100.0 and p == 100.0
+    assert degree_histogram_emd(tgt, gen_same_structure_other_labels) == 0.0
+    assert new_new_edge_ratio(sk, tgt) == 1 / 3
+    gen_wrong = TopologyGraph(adjacency={"A": ["B"], "B": ["A", "C", "X", "Y"], "C": ["B"], "X": ["B"], "Y": ["B"]})
+    r, p = attachment_overlap(sk, tgt, gen_wrong); assert r == 0.0 and p == 0.0

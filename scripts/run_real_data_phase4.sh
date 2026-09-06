@@ -67,7 +67,7 @@ import json, glob, os
 rows = []
 for f in sorted(glob.glob("outputs/experiments/stage2_eval_r3/*/aggregate.json")):
     a = json.load(open(f)); rows.append((os.path.basename(os.path.dirname(f)), a))
-keys = ["overall_pass", "node_deviation_pct", "edge_accuracy_pct", "density_deviation_pct", "aspl_deviation_pct", "n_components", "target_edge_recall_pct", "target_edge_precision_pct", "inference_time_s"]
+keys = ["overall_pass", "node_deviation_pct", "edge_accuracy_pct", "density_deviation_pct", "aspl_deviation_pct", "n_components", "target_edge_recall_pct", "target_edge_precision_pct", "attach_recall_pct", "attach_precision_pct", "degree_emd", "new_new_ratio_gen", "inference_time_s"]
 print("| generator | " + " | ".join(keys) + " |"); print("|" + "---|" * (len(keys) + 1))
 for n, a in rows: print(f"| {n} | " + " | ".join(f"{a.get(k, float('nan')):.3f}" for k in keys) + " |")
 open("outputs/experiments/stage2_eval_r3/table.md", "w").write("| generator | " + " | ".join(keys) + " |\n|" + "---|" * (len(keys) + 1) + "\n" + "\n".join(f"| {n} | " + " | ".join(f"{a.get(k, float('nan')):.3f}" for k in keys) + " |" for n, a in rows) + "\n")

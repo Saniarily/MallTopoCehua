@@ -17,9 +17,12 @@ from mall_space_planner.schemas import EvaluationResult, TopologyGraph
 from mall_space_planner.topology.convert import to_networkx
 from mall_space_planner.topology.metrics import (
     aspl_deviation,
+    attachment_overlap,
     compute_topology_metrics,
+    degree_histogram_emd,
     density_deviation,
     edge_accuracy,
+    new_new_edge_ratio,
     node_deviation,
 )
 
@@ -79,4 +82,11 @@ class TopologySpecEvaluator:
             metrics["node_count_error"] = abs(generated.num_nodes - target.num_nodes)
             metrics["target_edge_recall_pct"] = edge_accuracy(target, generated)
             metrics["target_edge_precision_pct"] = edge_accuracy(generated, target)
+            # label-free structural agreement (new-node labels in the corpus are not reproducible by construction)
+            att_r, att_p = attachment_overlap(skeleton, target, generated)
+            metrics["attach_recall_pct"] = att_r
+            metrics["attach_precision_pct"] = att_p
+            metrics["degree_emd"] = degree_histogram_emd(target, generated)
+            metrics["new_new_ratio_gen"] = new_new_edge_ratio(skeleton, generated)
+            metrics["new_new_ratio_target"] = new_new_edge_ratio(skeleton, target)
         return EvaluationResult(evaluator="topology_spec", metrics=metrics, passed=passed, overall_pass=all(passed.values()), details=details)
