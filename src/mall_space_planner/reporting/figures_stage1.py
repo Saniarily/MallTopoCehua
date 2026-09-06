@@ -140,7 +140,9 @@ def _tables_from_summary_md(path: Path) -> dict:
 
 
 def r05_type_tables(results: Path, out: Path) -> list[Path]:
-    """Per-cluster expected score by layout type with bootstrap CI, empirical mean as hollow markers, n as text."""
+    """Per-cluster expected score by layout type (bootstrap CI) + empirical mean; two panels:
+    (top) full tables; (bottom) the *well-supported* ranking (types with n >= min_n) to show that the
+    runner-up / ordering differs across city clusters even though the sparse top type is the same."""
     res = json.load(open(results / "stage1/type_recommender_results.json", encoding="utf-8"))
     last = res[-1]
     tables = last.get("type_tables") or _tables_from_summary_md(results / "stage1/type_recommender_summary.md")
@@ -148,32 +150,51 @@ def r05_type_tables(results: Path, out: Path) -> list[Path]:
         return []
     clusters = sorted(tables, key=int)
     s = load_style()
-    f, axes = plt.subplots(1, len(clusters), figsize=(s["figure"]["width_double"], 3.0), sharex=False)
-    for ax, c in zip(np.atleast_1d(axes), clusters):
+    min_n = 20
+    f, axes = plt.subplots(2, len(clusters), figsize=(s["figure"]["width_double"], 5.6), gridspec_kw={"height_ratios": [1.15, 1]})
+    for j, c in enumerate(clusters):
         rows = tables[c]
+        # ---- top: all six types
+        ax = axes[0, j]
         y = np.arange(len(rows))
-        exp = np.array([r["expected_score"] for r in rows])
-        lo = np.array([r["ci_low"] for r in rows])
-        hi = np.array([r["ci_high"] for r in rows])
-        cols = [s["palette"]["highlight"] if r["rank"] == 1 else s["palette"]["ours"] for r in rows]
+        exp = np.array([r["expected_score"] for r in rows]); lo = np.array([r["ci_low"] for r in rows]); hi = np.array([r["ci_high"] for r in rows])
+        sparse = np.array([r["empirical_n"] < min_n for r in rows])
+        cols = [s["palette"]["baseline"] if sp else s["palette"]["ours"] for sp in sparse]
         ax.hlines(y, lo, hi, color=cols, lw=2.2)
-        ax.scatter(exp, y, color=cols, s=28, zorder=3, label="模型期望评分（线段 = 80% 置信区间）")
-        emp = [r["empirical_mean"] for r in rows]
-        ax.scatter([e if e is not None else np.nan for e in emp], y, facecolors="none", edgecolors="#333", s=34, zorder=3, label="可比案例实际平均评分")
-        xr = max(hi) + 0.16
+        ax.scatter(exp, y, color=cols, s=26, zorder=3)
+        ax.scatter([r["empirical_mean"] if r["empirical_mean"] is not None else np.nan for r in rows], y, facecolors="none", edgecolors="#333", s=32, zorder=3)
+        xr = max(hi) + 0.17
         for yy, r in zip(y, rows):
-            ax.text(xr, yy, f"n={r['empirical_n']}", va="center", ha="right", fontsize=s["fonts"]["size_annot"], color="#555")
-        ax.set_yticks(y)
-        ax.set_yticklabels([r["layout_type"] for r in rows])
-        ax.invert_yaxis()
+            ax.text(xr, yy, f"n={r['empirical_n']}", va="center", ha="right", fontsize=s["fonts"]["size_annot"], color="#999" if r["empirical_n"] < min_n else "#333")
+        ax.set_yticks(y); ax.set_yticklabels([r["layout_type"] for r in rows]); ax.invert_yaxis()
         ax.set_title(label("clusters", c), fontsize=s["fonts"]["size_label"])
+        ax.set_xlim(min(lo) - 0.04, max(hi) + 0.18); ax.xaxis.set_major_locator(plt.MaxNLocator(4)); ax.grid(axis="y", alpha=0)
+        if j == 0:
+            ax.set_ylabel("(a) 全部六种类型")
+        # ---- bottom: well-supported types only, ranked
+        ax = axes[1, j]
+        sub = [r for r in rows if r["empirical_n"] >= min_n]
+        sub.sort(key=lambda r: -r["expected_score"])
+        y = np.arange(len(sub))
+        exp = np.array([r["expected_score"] for r in sub]); lo = np.array([r["ci_low"] for r in sub]); hi = np.array([r["ci_high"] for r in sub])
+        cols = [s["palette"]["highlight"] if i == 0 else s["palette"]["ours"] for i in range(len(sub))]
+        ax.hlines(y, lo, hi, color=cols, lw=2.6)
+        ax.scatter(exp, y, color=cols, s=30, zorder=3)
+        ax.scatter([r["empirical_mean"] for r in sub], y, facecolors="none", edgecolors="#333", s=34, zorder=3)
+        for yy, r in zip(y, sub):
+            ax.text(max(hi) + 0.015, yy, f"n={r['empirical_n']}", va="center", fontsize=s["fonts"]["size_annot"], color="#333")
+        ax.set_yticks(y); ax.set_yticklabels([f"{i+1}. {r['layout_type']}" for i, r in enumerate(sub)]); ax.invert_yaxis()
+        ax.set_xlim(min(lo) - 0.03, max(hi) + 0.09); ax.xaxis.set_major_locator(plt.MaxNLocator(4)); ax.grid(axis="y", alpha=0)
         ax.set_xlabel("期望综合评分")
-        ax.grid(axis="y", alpha=0)
-        ax.set_xlim(min(lo) - 0.04, max(hi) + 0.17)
-        ax.xaxis.set_major_locator(plt.MaxNLocator(4))
-    h, l = np.atleast_1d(axes)[0].get_legend_handles_labels()
-    f.legend(h[:2], l[:2], loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.06))
-    f.suptitle(title_for("R05") + "（红色 = 该类城市下预期评分最高的类型）", x=0.02, ha="left", fontweight="bold")
+        if j == 0:
+            ax.set_ylabel(f"(b) 样本充分的类型（n ≥ {min_n}）")
+    from matplotlib.lines import Line2D
+    handles = [Line2D([], [], color=s["palette"]["ours"], marker="o", lw=2.2, label="模型期望评分（线段 = 80% 置信区间）"),
+               Line2D([], [], color=s["palette"]["baseline"], marker="o", lw=2.2, label=f"同上，但可比案例 < {min_n} 个（证据不足，灰显）"),
+               Line2D([], [], color="none", marker="o", markerfacecolor="none", markeredgecolor="#333", label="可比案例实际平均评分"),
+               Line2D([], [], color=s["palette"]["highlight"], marker="o", lw=2.6, label="样本充分类型中的首选")]
+    f.legend(handles=handles, loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.04), fontsize=s["fonts"]["size_annot"])
+    f.suptitle(title_for("R05") + "：证据充分的类型排序随城市类别而变", x=0.02, ha="left", fontweight="bold")
     f.tight_layout()
     return savefig(f, out, "R05_stage1_type_expected_score_by_cluster")
 

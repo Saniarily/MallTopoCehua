@@ -26,7 +26,7 @@ def main() -> None:
     # copy processed data pointer if present (F02/F03 read cases.csv)
     index, failed = [], []
     for fn in figures_process.ALL + figures_stage1.ALL + figures_stage2.ALL:
-        code = fn.__name__.split("_")[0].upper()
+        code = fn.__name__.split("_")[0].upper().replace("F06B", "F06")
         if a.only and code not in {c.upper() for c in a.only}:
             continue
         try:
