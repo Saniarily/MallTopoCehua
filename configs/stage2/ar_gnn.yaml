@@ -6,6 +6,6 @@ checkpoint_dir: outputs/checkpoints/stage2
 stage2:
   generator:
     name: ar_gnn
-    params: {d_model: 64, n_layers: 3, dropout: 0.1, lr: 0.001, weight_decay: 0.0001, epochs: 12, patience: 4,
-             label_smoothing: 0.05, ensemble_k: 3, temperature: 0.7, best_of: 1, seed: 42,
+    params: {d_model: 64, n_layers: 3, dropout: 0.1, lr: 0.001, weight_decay: 0.0001, epochs: 10, patience: 3,
+             label_smoothing: 0.05, ensemble_k: 3, temperature: 0.7, best_of: 1, seed: 42, order: label, batch_steps: 64,
              checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn}

@@ -47,10 +47,10 @@ generator: rule_expander | search_expander(16 采样取大纲指标最优) | ar_
 → evaluator: topology_spec(大纲 5 指标 + 目标边召回/精度) + geometry(边界内比例/重叠率/无效多边形/可达率/面积分布/约束满足率)
 → 候选按 (全部硬检查通过, 约束满足率, 节点偏差) 排序
 ```
-### ar_gnn：自回归 GNN 扩展器
-- **状态**：当前部分图（骨架 + 已加节点）；节点特征 = [是否骨架, log 度, 归一化度, 时间步比例, 已加节点比例] ‖ 布局类型 one-hot；全局上下文 = [t/T, N_target 归一化] ‖ 类型 one-hot。
-- **一步**：GIN(3 层) 编码 → 三个头：`anchor`（新节点接到哪个已有节点，softmax over nodes，有限 mask −30）、`has2`（是否再加第二条边）、`second`（第二条边端点，条件于 anchor）。
-- **训练**：teacher forcing——真实扩展按 BFS 距骨架的规范顺序拆成 T 步；anchor 用 label-smoothing CE，second 用普通 CE，has2 用 BCE；早停看 val anchor 准确率；snapshot ensemble。
+### ar_gnn：自回归 GNN 扩展器（v2）
+- **状态**：当前部分图（骨架 + 已加节点）；节点特征 = [log 度, 聚类系数, 是否骨架, 是否新节点, t/N_target, 节点年龄, 是否上一步刚加, 到上一新节点的 BFS 距离, 骨架内度, 新邻居数, 叶子, 相对度, 孤立] ‖ 4 阶随机游走结构编码(RWSE) ‖ 布局 one-hot；全局上下文 = [t/T, 平均度, log N_target] ‖ 类型 one-hot；每层 GIN 与每个头都拼接全图 mean-readout。
+- **一步**：GIN(3 层) 编码 → 三个头：`anchor`（新节点接到哪个已有节点）、`has2`（是否再加第二条边）、`second`（第二条边端点，条件于 anchor，anchor 位置 mask −30）。
+- **训练**：teacher forcing 按**语料自身的标签顺序**（字母标签 = 创建顺序；邻居尚未出现的节点延后），BFS 顺序保留为消融；anchor / second 用**集合似然** −log Σ_{合法端点} p（31% 的步骤有多个合法锚点）；has2 用 BCE；64 步一批，OneCycle 学习率；早停看 val anchor 准确率；snapshot ensemble。
 - **推理**：温度采样逐步加 N_target − N_skeleton 个节点；**骨架节点与边始终不变**（原型保持是结构性保证而非软约束）；`best_of>1` 时按 节点/密度/ASPL 偏差 + 连通惩罚 挑最优。
 - **可比性**：与 rule/search 使用同一评估器、同一 600 条留出（训练集不含）。
 

@@ -1,4 +1,4 @@
 _base_: ar_gnn.yaml
 experiment_name: stage2_ar_gnn_bestof16
 stage2:
-  generator: {name: ar_gnn, params: {best_of: 16, temperature: 0.9, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn}}
+  generator: {name: ar_gnn, params: {best_of: 16, temperature: 0.7, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn}}
