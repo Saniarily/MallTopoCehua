@@ -150,20 +150,27 @@ def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | Non
     pad = r_data * 2.2
     if frame is not None:
         (x0, x1), (y0, y1) = frame
-        ax.set_xlim(x0 - pad, x1 + pad)
-        ax.set_ylim(y0 - pad, y1 + pad)
     else:
-        ax.set_xlim(P[:, 0].min() - pad, P[:, 0].max() + pad)
-        ax.set_ylim(P[:, 1].min() - pad, P[:, 1].max() + pad)
-    # ``datalim``: keep the axes box fixed (so titles of neighbouring panels align) and widen the data
-    # limits instead of shrinking the box.
-    ax.set_aspect("equal", adjustable="datalim")
+        x0, x1, y0, y1 = P[:, 0].min(), P[:, 0].max(), P[:, 1].min(), P[:, 1].max()
+    x0, x1, y0, y1 = x0 - pad, x1 + pad, y0 - pad, y1 + pad
+    # Equal aspect *without* letting matplotlib shrink the axes box (which mis-aligns titles) and
+    # without ``adjustable="datalim"`` (which is ignored under bbox_inches="tight" and clips the
+    # drawing): widen the data limits ourselves to the axes-box aspect ratio.
     ax.axis("off")
     ax.figure.canvas.draw()  # to get axis size in pixels
     bbox = ax.get_window_extent()
-    xr = ax.get_xlim()[1] - ax.get_xlim()[0]
-    yr = ax.get_ylim()[1] - ax.get_ylim()[0]
-    px_per_data = min(bbox.width / xr, bbox.height / yr)  # effective scale under equal aspect
+    box_aspect = bbox.height / max(bbox.width, 1e-9)
+    w, h = x1 - x0, y1 - y0
+    if h / max(w, 1e-9) < box_aspect:  # box is taller than the data -> grow y
+        extra = w * box_aspect - h
+        y0, y1 = y0 - extra / 2, y1 + extra / 2
+    else:  # box is wider -> grow x
+        extra = h / box_aspect - w
+        x0, x1 = x0 - extra / 2, x1 + extra / 2
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    ax.set_aspect("equal", adjustable="box")
+    px_per_data = bbox.width / (x1 - x0)
     pt_per_px = 72.0 / ax.figure.dpi
     r_pt = r_data * px_per_data * pt_per_px
     size_sk = (2 * r_pt) ** 2
