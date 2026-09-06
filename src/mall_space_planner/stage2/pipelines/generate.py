@@ -20,7 +20,7 @@ class Stage2Pipeline:
     def __init__(self, config: dict[str, Any]) -> None:
         s2 = config.get("stage2", {})
         self.generator = build("generator", s2.get("generator", {"name": "rule_expander"}))
-        self.decoder = build("geometry_decoder", s2.get("geometry_decoder", {"name": "corridor_partition"}))
+        self.decoder = build("geometry_decoder", s2.get("geometry_decoder", {"name": "planar_corridor"}))
         rep = s2.get("repairer", {"name": "basic"})
         self.repairer: BaseRepairer | None = build("repairer", rep) if rep else None
         self.topo_eval: TopologySpecEvaluator = build("evaluator", s2.get("evaluator", {"name": "topology_spec"}))

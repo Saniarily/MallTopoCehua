@@ -49,6 +49,8 @@ class ExpansionSample:
     target_num_nodes: int | None
     skeleton: TopologyGraph
     target: TopologyGraph
+    mall_id: str | None = None  # corpus v2: for leakage-free grouped splits
+    split: str | None = None  # corpus v2: train / val / test
 
     def to_record(self) -> dict:
         return {

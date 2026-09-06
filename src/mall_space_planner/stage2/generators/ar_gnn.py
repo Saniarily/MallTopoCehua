@@ -1,4 +1,15 @@
-"""Autoregressive GNN topology expander (learned Stage-2 generator), v2.
+"""Autoregressive GNN topology expander (learned Stage-2 generator), v3.
+
+v3 (real corpus from CSV graph files, see ``data/corpus_builder.py``)
+-------------------------------------------------------------------
+In the real corridor topologies a new key-point attaches to **1–4 already-present nodes**
+(sample ``B000A0E928_1``: 25 new nodes, anchors per node = {1: 6, 2: 9, 3: 9, 4: 1}) and the target
+is planar. The two heads "anchor" + "optional second edge" therefore become an **iterative
+anchor / stop** policy: pick anchor a₁, then repeatedly decide *stop* or *pick another anchor*
+(conditioned on the chosen set) up to ``max_anchors``. Training is teacher-forced over the
+canonical anchor sequence with set likelihood at every sub-step; inference adds a **planarity
+guard** (anchors that would make the graph non-planar are dropped) because corridor networks
+are planar by construction.
 
 Task
 ----
@@ -56,7 +67,8 @@ RWSE_K = 4
 NODE_BASE = 13
 NODE_DIM = NODE_BASE + RWSE_K + len(_LAYOUTS)
 CTX_DIM = 3 + len(_LAYOUTS)
-FEAT_VERSION = 2
+FEAT_VERSION = 3  # v3: multi-anchor heads (checkpoints from v2 must be retrained)
+MAX_ANCHORS = 4
 
 
 def _torch():  # noqa: ANN202
@@ -92,6 +104,15 @@ def canonical_order(skeleton: TopologyGraph, target: TopologyGraph, order: str =
     g = to_networkx(target)
     sk = set(skeleton.nodes)
     new = [n for n in g.nodes if n not in sk]
+    if order == "greedy":
+        # most already-present target neighbours first (ties: label) -> most steps close loops
+        present, rem, out_g = set(sk), set(new), []
+        while rem:
+            v = max(rem, key=lambda n: (sum(1 for u in g.neighbors(n) if u in present), tuple(-c for c in label_key(n)[:1]), n))
+            out_g.append(v)
+            present.add(v)
+            rem.remove(v)
+        return out_g
     if order == "bfs":
         dist: dict[str, int] = {n: 0 for n in sk if n in g}
         dq = deque(dist)
@@ -235,9 +256,11 @@ def _build_model(torch):  # noqa: ANN001, ANN202
             self.inp = nn.Sequential(nn.Linear(NODE_DIM, d), nn.GELU(), nn.Linear(d, d))
             self.ctx = nn.Linear(CTX_DIM, d)
             self.layers = nn.ModuleList([GIN(d, dropout) for _ in range(n_layers)])
-            self.anchor = nn.Sequential(nn.Linear(3 * d, d), nn.GELU(), nn.Linear(d, 1))
-            self.has2 = nn.Sequential(nn.Linear(3 * d, d), nn.GELU(), nn.Linear(d, 1))
-            self.second = nn.Sequential(nn.Linear(4 * d, d), nn.GELU(), nn.Linear(d, 1))
+            self.cnt = nn.Embedding(MAX_ANCHORS + 1, d)  # how many anchors already chosen
+            # per-node score of "next anchor" given [node, chosen-set summary, graph, ctx, count]
+            self.anchor = nn.Sequential(nn.Linear(5 * d, d), nn.GELU(), nn.Linear(d, 1))
+            # stop / continue given [chosen-set summary, graph, ctx, count]
+            self.stop = nn.Sequential(nn.Linear(4 * d, d), nn.GELU(), nn.Linear(d, 1))
 
         def encode(self, x, ei, ctx, batch, n_graphs):  # noqa: ANN001, ANN202
             h = self.inp(x)
@@ -246,22 +269,26 @@ def _build_model(torch):  # noqa: ANN001, ANN202
                 g = seg_mean(h, batch, n_graphs) + c
                 h = layer(h, ei, g[batch])
             g = seg_mean(h, batch, n_graphs) + c
-            return h, g
+            return h, g, c
 
-        def forward(self, x, ei, ctx, batch, n_graphs, anchor_idx=None):  # noqa: ANN001, ANN202
-            """anchor_idx: [B] global node indices (teacher forcing) or None (use argmax per graph)."""
-            h, g = self.encode(x, ei, ctx, batch, n_graphs)
-            gb = g[batch]
-            a_logits = self.anchor(torch.cat([h, gb, self.ctx(ctx)[batch]], 1)).squeeze(-1)
-            if anchor_idx is None:
-                # per-graph argmax (used at inference with B=1)
-                anchor_idx = torch.stack([(a_logits.masked_fill(batch != b, -1e9)).argmax() for b in range(n_graphs)])
-            ha = h[anchor_idx]  # [B, d]
-            has2 = self.has2(torch.cat([ha, g, self.ctx(ctx)], 1)).squeeze(-1)  # [B]
-            s_logits = self.second(torch.cat([h, ha[batch], gb, self.ctx(ctx)[batch]], 1)).squeeze(-1)
-            mask = torch.zeros_like(s_logits)
-            mask[anchor_idx] = -30.0
-            return a_logits, has2, s_logits + mask
+        def heads(self, h, g, c, node_src, sub_batch, sub_graph, chosen_sum, count):  # noqa: ANN001, ANN202
+            """Score sub-steps. ``node_src``: replicated node -> original node index; ``sub_batch``: replicated
+            node -> sub-step id; ``sub_graph``: sub-step -> graph id; ``chosen_sum`` [S, d]: mean h of chosen
+            anchors (zeros if none); ``count`` [S]: number chosen so far. Returns (anchor logits [R], stop logits [S])."""
+            ce = self.cnt(count)
+            gs, cs = g[sub_graph], c[sub_graph]
+            a = self.anchor(torch.cat([h[node_src], chosen_sum[sub_batch], gs[sub_batch], cs[sub_batch], ce[sub_batch]], 1)).squeeze(-1)
+            s = self.stop(torch.cat([chosen_sum, gs, cs, ce], 1)).squeeze(-1)
+            return a, s
+
+        def forward(self, x, ei, ctx, batch, n_graphs, node_src, sub_batch, sub_graph, chosen_idx, chosen_sub, count):  # noqa: ANN001
+            h, g, c = self.encode(x, ei, ctx, batch, n_graphs)
+            S = int(sub_graph.shape[0])
+            chosen_sum = torch.zeros(S, h.shape[1], device=h.device, dtype=h.dtype)
+            if chosen_idx.numel():
+                chosen_sum = chosen_sum.index_add(0, chosen_sub, h[chosen_idx])
+                chosen_sum = chosen_sum / count.clamp(min=1).unsqueeze(1).to(h.dtype)
+            return self.heads(h, g, c, node_src, sub_batch, sub_graph, chosen_sum, count)
 
     return ARExpander
 
@@ -319,6 +346,8 @@ class ARGNNExpander(BaseTopologyGenerator):
         second_from_valid_only: bool = True,
         loss_mode: str = "set",
         feature_set: str = "full",
+        max_anchors: int = MAX_ANCHORS,
+        planarity_guard: bool = True,
     ) -> None:
         """``loss_mode``: ``set`` = -log Σ_{valid} p (v2) | ``single`` = CE on the first valid anchor only (v1 ablation)."""
         self.hp = dict(d_model=d_model, n_layers=n_layers, dropout=dropout)
@@ -327,8 +356,10 @@ class ARGNNExpander(BaseTopologyGenerator):
         self.temperature, self.best_of, self.w_aspl, self.device_pref, self.seed, self.label_style = temperature, best_of, w_aspl, device, seed, label_style
         self.order, self.batch_steps, self.second_from_valid_only = order, batch_steps, second_from_valid_only
         self.loss_mode, self.feature_set = loss_mode, feature_set
+        self.max_anchors, self.planarity_guard = min(max_anchors, MAX_ANCHORS), planarity_guard
         self.states_: list[dict] = []
-        self.history_: dict[str, list[float]] = {"train_loss": [], "val_anchor_acc": [], "val_has2_acc": [], "val_anchor_top3": []}
+        # val_has2_acc is kept for backwards-compatible plots: it is now the stop/continue accuracy
+        self.history_: dict[str, list[float]] = {"train_loss": [], "val_anchor_acc": [], "val_has2_acc": [], "val_anchor_top3": [], "val_count_acc": []}
         self._model = None
         self._ens: list[Any] = []
         if checkpoint:
@@ -351,19 +382,46 @@ class ARGNNExpander(BaseTopologyGenerator):
         return {"x": x, "ei": ei, "ctx": ctx, "valid": np.array(step["valid"], np.int64), "n": len(step["present"])}
 
     def _collate(self, items: list[dict[str, Any]], torch, device):  # noqa: ANN001, ANN202
-        xs, eis, ctxs, batch, valid, anchor, off = [], [], [], [], [], [], 0
+        """Batch of teacher steps -> graph tensors + sub-step tensors.
+
+        For a step with ordered valid anchors V (|V| = m, truncated to ``max_anchors``) we create sub-steps
+        j = 0..m: chosen = V[:j]; at j < m the correct move is "pick any of V[j:]" (set likelihood, stop = 0);
+        at j = m the correct move is "stop". ``loss_mode == "single"`` keeps only j = 0 with V[:1] (v1 ablation).
+        """
+        xs, eis, ctxs, batch, off = [], [], [], [], 0
+        node_src, sub_batch, sub_graph, chosen_idx, chosen_sub, count, tgt_mask, stop_y = [], [], [], [], [], [], [], []
+        s_id = 0
         for b, it in enumerate(items):
-            xs.append(it["x"])
-            eis.append(it["ei"] + off)
-            ctxs.append(it["ctx"])
-            batch.append(np.full(it["n"], b, np.int64))
-            vm = np.zeros(it["n"], np.float32)
-            vm[it["valid"]] = 1.0
-            valid.append(vm)
-            anchor.append(off + int(it["valid"][0]))
-            off += it["n"]
-        t = lambda a, dt=None: torch.tensor(np.concatenate(a) if isinstance(a, list) else a, dtype=dt, device=device)  # noqa: E731
-        return t(xs), torch.tensor(np.concatenate(eis, 1), device=device), torch.tensor(np.stack(ctxs), device=device), t(batch), t(valid), torch.tensor(anchor, device=device)
+            n = it["n"]
+            xs.append(it["x"]); eis.append(it["ei"] + off); ctxs.append(it["ctx"]); batch.append(np.full(n, b, np.int64))
+            V = [int(v) for v in it["valid"]][: self.max_anchors]
+            if self.loss_mode == "single":
+                V = V[:1]
+            subs = range(len(V) + 1) if self.loss_mode != "single" else range(1)
+            for j in subs:
+                node_src.append(np.arange(n) + off); sub_batch.append(np.full(n, s_id, np.int64)); sub_graph.append(b)
+                for a in V[:j]:
+                    chosen_idx.append(off + a); chosen_sub.append(s_id)
+                count.append(j)
+                m = np.zeros(n, np.float32)
+                if j < len(V):
+                    m[V[j:]] = 1.0
+                    stop_y.append(0.0)
+                else:
+                    stop_y.append(1.0)
+                tgt_mask.append(m)
+                s_id += 1
+            off += n
+        T = lambda a, dt=None: torch.tensor(np.concatenate(a) if isinstance(a, list) and len(a) and isinstance(a[0], np.ndarray) else np.asarray(a), dtype=dt, device=device)  # noqa: E731
+        return {
+            "x": T(xs), "ei": torch.tensor(np.concatenate(eis, 1), device=device), "ctx": torch.tensor(np.stack(ctxs), device=device), "batch": T(batch), "B": len(items),
+            "node_src": T(node_src, torch.long), "sub_batch": T(sub_batch, torch.long), "sub_graph": torch.tensor(np.asarray(sub_graph, np.int64), device=device),
+            "chosen_idx": torch.tensor(np.asarray(chosen_idx, np.int64), device=device), "chosen_sub": torch.tensor(np.asarray(chosen_sub, np.int64), device=device),
+            "count": torch.tensor(np.asarray(count, np.int64), device=device), "tgt_mask": T(tgt_mask), "stop_y": torch.tensor(np.asarray(stop_y, np.float32), device=device),
+        }
+
+    def _forward(self, model, d):  # noqa: ANN001, ANN202
+        return model(d["x"], d["ei"], d["ctx"], d["batch"], d["B"], d["node_src"], d["sub_batch"], d["sub_graph"], d["chosen_idx"], d["chosen_sub"], d["count"])
 
     # ------------------------------------------------------------------ fit
     def fit(self, samples: list[ExpansionSample]) -> ARGNNExpander:  # type: ignore[override]
@@ -394,24 +452,24 @@ class ARGNNExpander(BaseTopologyGenerator):
             t0 = time.perf_counter()
             for bi in range(0, len(perm), self.batch_steps):
                 items = [tr[i] for i in perm[bi : bi + self.batch_steps]]
-                x, ei, ctx, batch, vmask, a_idx = self._collate(items, torch, device)
-                B = len(items)
-                a_logits, has2, s_logits = model(x, ei, ctx, batch, B, anchor_idx=a_idx)
-                n_valid = torch.tensor([len(it["valid"]) for it in items], device=device)
-                if self.loss_mode == "single":  # v1-style: only the first valid anchor counts as correct
-                    single = torch.zeros_like(vmask)
-                    single[a_idx] = 1.0
-                    loss = set_nll(a_logits, batch, B, single > 0.5, self.label_smoothing) + bce(has2, (n_valid >= 2).float())
-                else:
-                    loss = set_nll(a_logits, batch, B, vmask > 0.5, self.label_smoothing) + bce(has2, (n_valid >= 2).float())
-                two = n_valid >= 2
-                if bool(two.any()):
-                    v2 = vmask.clone()
-                    v2[a_idx] = 0.0  # anchor is not a candidate for the second endpoint
-                    keep = two[batch]
-                    # restrict to graphs with a second edge: recompute compact batch ids
-                    remap = torch.cumsum(two.long(), 0) - 1
-                    loss = loss + set_nll(s_logits[keep], remap[batch[keep]], int(two.sum()), v2[keep] > 0.5)
+                d = self._collate(items, torch, device)
+                a_logits, s_logits = self._forward(model, d)
+                S = int(d["sub_graph"].shape[0])
+                pick = d["stop_y"] < 0.5  # sub-steps where an anchor must be picked
+                loss = bce(s_logits, d["stop_y"]) if self.loss_mode != "single" else torch.zeros((), device=device)
+                if bool(pick.any()):
+                    # already-chosen anchors are not candidates again
+                    tm = d["tgt_mask"].clone()
+                    al = a_logits.clone()
+                    if d["chosen_idx"].numel():
+                        # map (chosen node, sub-step) -> replicated row: rows are contiguous per sub-step in node order
+                        starts = torch.cumsum(torch.bincount(d["sub_batch"], minlength=S), 0) - torch.bincount(d["sub_batch"], minlength=S)
+                        g_off = torch.cumsum(torch.bincount(d["batch"], minlength=d["B"]), 0) - torch.bincount(d["batch"], minlength=d["B"])
+                        rows = starts[d["chosen_sub"]] + (d["chosen_idx"] - g_off[d["sub_graph"][d["chosen_sub"]]])
+                        al[rows] = -30.0
+                    keep = pick[d["sub_batch"]]
+                    remap = torch.cumsum(pick.long(), 0) - 1
+                    loss = loss + set_nll(al[keep], remap[d["sub_batch"][keep]], int(pick.sum()), tm[keep] > 0.5, self.label_smoothing)
                 opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -437,24 +495,28 @@ class ARGNNExpander(BaseTopologyGenerator):
         return self
 
     def _validate(self, model, items, torch, device) -> tuple[float, float, float]:  # noqa: ANN001
+        """(first-anchor acc, first-anchor top-3, stop/continue acc over all sub-steps)."""
         if not items:
             return float("nan"), float("nan"), float("nan")
         model.eval()
-        ok_a = ok_3 = ok_2 = 0
+        ok_a = ok_3 = ok_s = n_s = 0
         with torch.no_grad():
-            for bi in range(0, len(items), 256):
-                chunk = items[bi : bi + 256]
-                x, ei, ctx, batch, vmask, a_idx = self._collate(chunk, torch, device)
-                B = len(chunk)
-                a_logits, has2, _ = model(x, ei, ctx, batch, B, anchor_idx=a_idx)
-                pl, pv = _pad(a_logits, batch, B), _pad(vmask, batch, B, fill=0.0) > 0.5
+            for bi in range(0, len(items), 128):
+                chunk = items[bi : bi + 128]
+                d = self._collate(chunk, torch, device)
+                a_logits, s_logits = self._forward(model, d)
+                first = d["count"] == 0  # sub-step 0 of every step
+                sel = first[d["sub_batch"]]
+                S0 = int(first.sum())
+                remap = torch.cumsum(first.long(), 0) - 1
+                pl = _pad(a_logits[sel], remap[d["sub_batch"][sel]], S0)
+                pv = _pad(d["tgt_mask"][sel], remap[d["sub_batch"][sel]], S0, fill=0.0) > 0.5
                 top = pl.topk(min(3, pl.shape[1]), 1).indices
                 hit = pv.gather(1, top)
-                ok_a += int(hit[:, 0].sum())
-                ok_3 += int(hit.any(1).sum())
-                n_valid = torch.tensor([len(it["valid"]) for it in chunk], device=device)
-                ok_2 += int(((has2 > 0) == (n_valid >= 2)).sum())
-        return ok_a / len(items), ok_3 / len(items), ok_2 / len(items)
+                ok_a += int(hit[:, 0].sum()); ok_3 += int(hit.any(1).sum())
+                if self.loss_mode != "single":
+                    ok_s += int(((s_logits > 0).float() == d["stop_y"]).sum()); n_s += int(d["stop_y"].numel())
+        return ok_a / len(items), ok_3 / len(items), (ok_s / n_s if n_s else float("nan"))
 
     # ------------------------------------------------------------------ generate
     def _ensemble(self, torch, device):  # noqa: ANN001, ANN202
@@ -477,41 +539,70 @@ class ARGNNExpander(BaseTopologyGenerator):
         k_ens = len(models)
         counter = len(present)
         k = 1
+        tau = max(self.temperature, 1e-3)
+        g_live = nx.Graph()
+        g_live.add_nodes_from(present)
+        g_live.add_edges_from(edges)
         with torch.no_grad():
             while len(present) < n_target:
+                n = len(present)
                 x, ei, ctx = state_features(present, edges, sk_nodes, added_at, k, n_target, layout_oh, self.feature_set)
                 x_t, ei_t, ctx_t = torch.tensor(x, device=device), torch.tensor(ei, device=device), torch.tensor(ctx[None], device=device)
-                batch = torch.zeros(len(present), dtype=torch.long, device=device)
-                a_acc = sum(m(x_t, ei_t, ctx_t, batch, 1, anchor_idx=torch.zeros(1, dtype=torch.long, device=device))[0] for m in models)
-                a_probs = torch.softmax(a_acc / (max(self.temperature, 1e-3) * k_ens), 0).cpu().numpy()
-                a = int(rng.choice(len(present), p=a_probs / a_probs.sum())) if self.temperature > 0 else int(a_probs.argmax())
-                a_t = torch.tensor([a], device=device)
-                h2_acc, s_acc = 0.0, 0.0
-                for m in models:
-                    _, h2, s_l = m(x_t, ei_t, ctx_t, batch, 1, anchor_idx=a_t)
-                    h2_acc, s_acc = h2_acc + h2, s_acc + s_l
-                p2 = float(torch.sigmoid(h2_acc / k_ens))
+                batch = torch.zeros(n, dtype=torch.long, device=device)
+                enc = [m.encode(x_t, ei_t, ctx_t, batch, 1) for m in models]  # encode once per step
+                node_src = torch.arange(n, device=device)
+                sub_batch = torch.zeros(n, dtype=torch.long, device=device)
+                sub_graph = torch.zeros(1, dtype=torch.long, device=device)
                 new = letter_label(counter) if self.label_style == "letters" else f"N{counter:03d}"
                 while new in present:
                     counter += 1
                     new = letter_label(counter) if self.label_style == "letters" else f"N{counter:03d}"
                 counter += 1
-                new_edges = [(present[a], new)]
-                if rng.rand() < p2 and len(present) > 1:
-                    s_probs = torch.softmax(s_acc / (max(self.temperature, 1e-3) * k_ens), 0).cpu().numpy()
-                    s_probs[a] = 0
-                    if s_probs.sum() > 0:
-                        b = int(rng.choice(len(present), p=s_probs / s_probs.sum())) if self.temperature > 0 else int(s_probs.argmax())
-                        new_edges.append((present[b], new))
+                chosen: list[int] = []
+                banned: set[int] = set()
+                while len(chosen) < self.max_anchors:
+                    cnt = torch.tensor([len(chosen)], device=device)
+                    a_acc, s_acc = 0.0, 0.0
+                    for m, (h, g, c) in zip(models, enc, strict=True):
+                        cs = h[chosen].mean(0, keepdim=True) if chosen else torch.zeros(1, h.shape[1], device=device, dtype=h.dtype)
+                        a_l, s_l = m.heads(h, g, c, node_src, sub_batch, sub_graph, cs, cnt)
+                        a_acc, s_acc = a_acc + a_l, s_acc + s_l
+                    if chosen:  # stop / continue decision (first anchor is mandatory)
+                        p_stop = float(torch.sigmoid(s_acc / k_ens))
+                        stop = (rng.rand() < p_stop) if self.temperature > 0 else (p_stop > 0.5)
+                        if stop:
+                            break
+                    probs = torch.softmax(a_acc / (tau * k_ens), 0).cpu().numpy().astype(float)
+                    for i in chosen:
+                        probs[i] = 0.0
+                    for i in banned:
+                        probs[i] = 0.0
+                    if probs.sum() <= 0:
+                        break
+                    probs /= probs.sum()
+                    a = int(rng.choice(n, p=probs)) if self.temperature > 0 else int(probs.argmax())
+                    if self.planarity_guard and chosen:
+                        # corridor networks are planar: reject an anchor that would break planarity
+                        g_live.add_node(new)
+                        g_live.add_edges_from((present[i], new) for i in [*chosen, a])
+                        ok = nx.check_planarity(g_live)[0]
+                        g_live.remove_node(new)
+                        if not ok:
+                            banned.add(a)
+                            if len(banned) >= 3:
+                                break
+                            continue
+                    chosen.append(a)
+                new_edges = [(present[i], new) for i in chosen]
                 edges.extend(new_edges)
                 present.append(new)
                 added_at[new] = k
+                g_live.add_node(new)
+                g_live.add_edges_from(new_edges)
                 k += 1
-        g = nx.Graph()
-        g.add_nodes_from(present)
-        g.add_edges_from(edges)
-        out = from_networkx(g)
+        out = from_networkx(g_live)
         out.node_types = {n: sk.node_types.get(n, "M") for n in out.nodes}
+        out.positions = dict(sk.positions)
         return out
 
     def generate(self, request: GenerationRequest, seed: int) -> TopologyGraph:
@@ -536,7 +627,7 @@ class ARGNNExpander(BaseTopologyGenerator):
         torch = _torch()
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        meta = {"hp": self.hp, "history": self.history_, "n_states": len(self.states_), "order": self.order, "feat_version": FEAT_VERSION, "loss_mode": self.loss_mode, "feature_set": self.feature_set}
+        meta = {"hp": self.hp, "history": self.history_, "n_states": len(self.states_), "order": self.order, "feat_version": FEAT_VERSION, "loss_mode": self.loss_mode, "feature_set": self.feature_set, "max_anchors": self.max_anchors}
         torch.save({"states": self.states_, "seed": self.seed, **meta}, path / "ar_gnn.pt")
         (path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return path
@@ -550,5 +641,6 @@ class ARGNNExpander(BaseTopologyGenerator):
         self.order = blob.get("order", self.order)
         self.feature_set = blob.get("feature_set", self.feature_set)
         self.loss_mode = blob.get("loss_mode", self.loss_mode)
+        self.max_anchors = int(blob.get("max_anchors", self.max_anchors))
         self._model, self._ens = None, []
         return self

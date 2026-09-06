@@ -18,3 +18,4 @@ dataset:
     split: {test_ratio: 0.1, val_ratio: 0.1, seed: 42, stratify_col: city_cluster}
 processed_dir: data/processed/legacy
 sharegpt_json: "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/MallTopoCehua/sharegpt_data.json"   # Stage-2 corpus (set on your machine)
+stage2_corpus: "data/processed/legacy/stage2_corpus_v2.jsonl"   # Stage-2 corpus v2 (built by scripts/build_stage2_corpus.py from *_M.csv + *_M_simplified*.csv)
