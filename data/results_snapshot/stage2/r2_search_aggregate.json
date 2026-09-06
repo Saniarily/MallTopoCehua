@@ -1,0 +1,68 @@
+{
+  "n_samples": 600,
+  "generator": "search_expander",
+  "n_skeleton": 19.5,
+  "n_target": 32.721666666666664,
+  "overall_pass": 0.9583333333333334,
+  "node_deviation_pct": 1.35,
+  "edge_accuracy_pct": 100.0,
+  "density_deviation_pct": 8.345430661085516,
+  "aspl_deviation_pct": 2.534619764698272,
+  "inference_time_s": 0.022237239738399996,
+  "n_nodes": 32.80833333333333,
+  "n_edges": 40.23166666666667,
+  "n_components": 1.0216666666666667,
+  "edge_count_error": 4.971666666666667,
+  "node_count_error": 1.8333333333333333,
+  "target_edge_recall_pct": 60.99837595199972,
+  "target_edge_precision_pct": 71.3965045221758,
+  "pass_node_deviation": 0.99,
+  "pass_edge_accuracy": 1.0,
+  "pass_density_deviation": 0.9666666666666667,
+  "pass_aspl_deviation": 1.0,
+  "pass_inference_time": 1.0,
+  "by_layout": {
+    "Unknown_Layout": {
+      "overall_pass": 1.0,
+      "node_deviation_pct": 1.667,
+      "density_deviation_pct": 8.048,
+      "aspl_deviation_pct": 2.014
+    },
+    "一字型": {
+      "overall_pass": 0.986,
+      "node_deviation_pct": 0.483,
+      "density_deviation_pct": 7.662,
+      "aspl_deviation_pct": 2.285
+    },
+    "复杂集中型": {
+      "overall_pass": 1.0,
+      "node_deviation_pct": 0.0,
+      "density_deviation_pct": 9.886,
+      "aspl_deviation_pct": 2.656
+    },
+    "多环型": {
+      "overall_pass": 1.0,
+      "node_deviation_pct": 0.563,
+      "density_deviation_pct": 4.111,
+      "aspl_deviation_pct": 1.371
+    },
+    "简单型": {
+      "overall_pass": 1.0,
+      "node_deviation_pct": 0.0,
+      "density_deviation_pct": 1.778,
+      "aspl_deviation_pct": 1.331
+    },
+    "简单环型": {
+      "overall_pass": 0.918,
+      "node_deviation_pct": 3.059,
+      "density_deviation_pct": 9.777,
+      "aspl_deviation_pct": 2.962
+    },
+    "简单集中型": {
+      "overall_pass": 0.773,
+      "node_deviation_pct": 3.636,
+      "density_deviation_pct": 19.817,
+      "aspl_deviation_pct": 6.259
+    }
+  }
+}

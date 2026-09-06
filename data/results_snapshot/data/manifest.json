@@ -1,0 +1,83 @@
+{
+  "source": "legacy",
+  "main_table_csv": "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/DATASET_3+6类城市_with_rkn_ratios_and_topo_metrics.csv",
+  "graph_dir": "/Users/saniarily/Desktop/Coding_Mac/Mall_Topo/Graph_Data/total_graph_data/total_graph_data(6005个地上层)",
+  "id_col": "floor_id",
+  "mall_id_col": "mall_id",
+  "label_col": "total_score",
+  "city_cluster_col": "city_cluster",
+  "total_area_col": "total_area",
+  "query_cols": [
+    "people",
+    "GDP_2023",
+    "PCDI_2023",
+    "TP_2023",
+    "mall_area_count",
+    "nearest_distance_km",
+    "count_1km",
+    "count_2km",
+    "total_area",
+    "Tx"
+  ],
+  "metric_cols": [
+    "L1_density",
+    "L2_diameter",
+    "L2_complexity",
+    "L2_integration"
+  ],
+  "graph_metric_cols": [
+    "g_num_nodes",
+    "g_num_edges",
+    "g_density",
+    "g_avg_degree",
+    "g_diameter",
+    "g_avg_shortest_path",
+    "g_num_cycles",
+    "g_n_components",
+    "g_clustering",
+    "g_degree_entropy",
+    "g_max_betweenness"
+  ],
+  "split": {
+    "test_ratio": 0.1,
+    "val_ratio": 0.1,
+    "seed": 42,
+    "stratify_col": "city_cluster",
+    "group_col": "mall_id",
+    "train_rows": 4318,
+    "val_rows": 551,
+    "test_rows": 526,
+    "train_groups": 967,
+    "val_groups": 121,
+    "test_groups": 121
+  },
+  "n_missing_graphs": 266,
+  "environment": {
+    "timestamp_utc": "2026-09-05T12:49:41.699948+00:00",
+    "python": "3.11.14",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "git_commit": "e9e10413c90ce1b7f9b2ce340f7143df8b675495",
+    "packages": {
+      "numpy": "2.4.2",
+      "pandas": "3.0.0",
+      "scipy": "1.17.0",
+      "sklearn": "1.8.0",
+      "networkx": "3.6.1",
+      "shapely": "2.1.2",
+      "pydantic": "2.12.5",
+      "torch": "2.4.1",
+      "torch_geometric": "2.6.1",
+      "lightgbm": "4.6.0",
+      "xgboost": null,
+      "catboost": null,
+      "shap": null,
+      "streamlit": null,
+      "mlflow": null
+    },
+    "torch_device": "mps"
+  },
+  "table_file": "cases.csv",
+  "n_cases": 5395,
+  "n_graphs": 5114
+}

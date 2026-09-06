@@ -40,9 +40,13 @@ python scripts/run_e2e.py --condition data/samples/query_example.json --use-top-
 # 阶段二 AR-GNN：训练（自动留出语料最后 600 条）→ 与 rule/search 在同一留出集比较
 python scripts/train_stage2.py --config configs/stage2/ar_gnn.yaml --corpus /path/to/sharegpt_data.json --override stage2.generator.params.checkpoint=null
 python scripts/evaluate_stage2.py --config configs/stage2/ar_gnn_bestof16.yaml --corpus /path/to/sharegpt_data.json --limit 600
-# 真实数据一键脚本（Mac）：第 1–2 轮 / 第 3 轮（Phase 4）
+# 真实数据一键脚本（Mac）：第 1–2 轮 / 第 3 轮（Phase 4）/ 第 4 轮（阶段二消融与多 seed）
 bash scripts/run_real_data_phase2.sh
-CORPUS=/path/to/sharegpt_data.json bash scripts/run_real_data_phase4.sh
+bash scripts/run_real_data_phase4.sh
+bash scripts/run_real_data_round4.sh
+# 论文全部图表（PNG/PDF/SVG，中文字体自动探测；样式与中文标签在 configs/thesis/style.yaml）
+python scripts/make_thesis_report.py                 # → outputs/thesis/figures/ ；报告正文见 docs/thesis/thesis_report.md
+python scripts/make_thesis_report.py --only R05 R09  # 只重生成指定图
 ```
 
 ## 目录
@@ -59,4 +63,5 @@ CORPUS=/path/to/sharegpt_data.json bash scripts/run_real_data_phase4.sh
 - ✅ 原型保真度协议、真实数据第 1–2 轮结果（`docs/experiments.md`）；36 个测试通过
 - ✅ 第 3 轮真实实验完成：deep_residual 与经典持平（残差结构是关键成分）；类型模型 best-type 一致率 100%、policy uplift +0.056；**AR-GNN v2 在结构指标上明显超过规则/搜索**（attach precision 79.7 vs 43.2）——见 `docs/experiments.md`
 - ⏳ 待实现（Phase 5）：Streamlit Viewer Hub（数据浏览 / 实验看板 / 策划工作台）、FastAPI、学习型校准器、MLflow（可选）
+- ✅ 第 4 轮：阶段二 3 seeds + AR-GNN 三项消融 + 大模型；**全部实验完成**。论文报告：`docs/thesis/thesis_report.md`（21 张图 `docs/thesis/figures/`）
 详见 `docs/methodology.md`、`docs/innovation_points.md`、`docs/experiments.md`。

@@ -1,0 +1,222 @@
+[
+  {
+    "n_test_floors": 520,
+    "n_test_malls": 119,
+    "rmse_with_type": 0.42458471077348187,
+    "rmse_conditions_only": 0.4272110411257568,
+    "spearman_with_type": 0.5712921321233037,
+    "spearman_conditions_only": 0.5678178683311516,
+    "per_cluster": [
+      {
+        "cluster": 1,
+        "n": 199,
+        "kendall_tau_type_order": 0.2,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.596,
+        "score_when_type_differs": 4.566666666666666,
+        "n_match": 25
+      },
+      {
+        "cluster": 2,
+        "n": 114,
+        "kendall_tau_type_order": 0.6,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.666666666666665,
+        "score_when_type_differs": 4.240196078431373,
+        "n_match": 12
+      },
+      {
+        "cluster": 3,
+        "n": 207,
+        "kendall_tau_type_order": 0.3333333333333333,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.309677419354839,
+        "score_when_type_differs": 4.447727272727273,
+        "n_match": 31
+      }
+    ],
+    "mean_kendall_tau_type_order": 0.37777777777777777,
+    "policy_uplift": 0.03125976054138491,
+    "best_type_agreement_rate": 1.0,
+    "seed": 42
+  },
+  {
+    "n_test_floors": 520,
+    "n_test_malls": 119,
+    "rmse_with_type": 0.42453629188734077,
+    "rmse_conditions_only": 0.42685362819816886,
+    "spearman_with_type": 0.5732193635793698,
+    "spearman_conditions_only": 0.562015134466506,
+    "per_cluster": [
+      {
+        "cluster": 1,
+        "n": 199,
+        "kendall_tau_type_order": 0.2,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.687096774193549,
+        "score_when_type_differs": 4.548809523809524,
+        "n_match": 31
+      },
+      {
+        "cluster": 2,
+        "n": 114,
+        "kendall_tau_type_order": 0.6,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.371428571428571,
+        "score_when_type_differs": 4.273,
+        "n_match": 14
+      },
+      {
+        "cluster": 3,
+        "n": 207,
+        "kendall_tau_type_order": 0.4666666666666666,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.2827586206896555,
+        "score_when_type_differs": 4.450561797752809,
+        "n_match": 29
+      }
+    ],
+    "mean_kendall_tau_type_order": 0.4222222222222222,
+    "policy_uplift": 0.021161071385287222,
+    "best_type_agreement_rate": 1.0,
+    "seed": 43
+  },
+  {
+    "n_test_floors": 520,
+    "n_test_malls": 119,
+    "rmse_with_type": 0.42185246016841166,
+    "rmse_conditions_only": 0.4256182039792446,
+    "spearman_with_type": 0.5891150585272219,
+    "spearman_conditions_only": 0.5645830635509083,
+    "per_cluster": [
+      {
+        "cluster": 1,
+        "n": 199,
+        "kendall_tau_type_order": 0.3333333333333333,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.665384615384616,
+        "score_when_type_differs": 4.55606936416185,
+        "n_match": 26
+      },
+      {
+        "cluster": 2,
+        "n": 114,
+        "kendall_tau_type_order": 0.6,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.77,
+        "score_when_type_differs": 4.238461538461538,
+        "n_match": 10
+      },
+      {
+        "cluster": 3,
+        "n": 207,
+        "kendall_tau_type_order": 0.4666666666666666,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.303333333333333,
+        "score_when_type_differs": 4.448022598870057,
+        "n_match": 30
+      }
+    ],
+    "mean_kendall_tau_type_order": 0.4666666666666666,
+    "policy_uplift": 0.07547723935389161,
+    "best_type_agreement_rate": 1.0,
+    "seed": 44
+  },
+  {
+    "n_test_floors": 520,
+    "n_test_malls": 119,
+    "rmse_with_type": 0.4303628657603469,
+    "rmse_conditions_only": 0.42842212736935803,
+    "spearman_with_type": 0.5618579844780605,
+    "spearman_conditions_only": 0.5673675774149954,
+    "per_cluster": [
+      {
+        "cluster": 1,
+        "n": 199,
+        "kendall_tau_type_order": 0.3333333333333333,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.603846153846154,
+        "score_when_type_differs": 4.565317919075144,
+        "n_match": 26
+      },
+      {
+        "cluster": 2,
+        "n": 114,
+        "kendall_tau_type_order": 0.6,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.609999999999999,
+        "score_when_type_differs": 4.253846153846154,
+        "n_match": 10
+      },
+      {
+        "cluster": 3,
+        "n": 207,
+        "kendall_tau_type_order": 0.3333333333333333,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.386206896551724,
+        "score_when_type_differs": 4.4337078651685395,
+        "n_match": 29
+      }
+    ],
+    "mean_kendall_tau_type_order": 0.4222222222222222,
+    "policy_uplift": 0.06505494505494624,
+    "best_type_agreement_rate": 1.0,
+    "seed": 45
+  },
+  {
+    "n_test_floors": 520,
+    "n_test_malls": 119,
+    "rmse_with_type": 0.4258836989944919,
+    "rmse_conditions_only": 0.4272173156526146,
+    "spearman_with_type": 0.5713217063938842,
+    "spearman_conditions_only": 0.5633340453581056,
+    "per_cluster": [
+      {
+        "cluster": 1,
+        "n": 199,
+        "kendall_tau_type_order": 0.2,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.684,
+        "score_when_type_differs": 4.554022988505747,
+        "n_match": 25
+      },
+      {
+        "cluster": 2,
+        "n": 114,
+        "kendall_tau_type_order": 0.4666666666666666,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.685714285714285,
+        "score_when_type_differs": 4.229,
+        "n_match": 14
+      },
+      {
+        "cluster": 3,
+        "n": 207,
+        "kendall_tau_type_order": 0.3333333333333333,
+        "empirical_best_type": "复杂集中型",
+        "recommended_best_type": "复杂集中型",
+        "score_when_type_matches_rec": 4.310714285714286,
+        "score_when_type_differs": 4.445251396648045,
+        "n_match": 28
+      }
+    ],
+    "mean_kendall_tau_type_order": 0.3333333333333333,
+    "policy_uplift": 0.08906461072122873,
+    "best_type_agreement_rate": 1.0,
+    "seed": 46
+  }
+]
