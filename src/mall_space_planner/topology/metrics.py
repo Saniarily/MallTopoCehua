@@ -142,3 +142,46 @@ def compute_topology_metrics(graph: TopologyGraph | nx.Graph, with_betweenness: 
         bc = nx.betweenness_centrality(g, normalized=True)
         out.max_betweenness = float(max(bc.values())) if bc else 0.0
     return out
+
+
+# --------------------------------------------------------------------------- label-free structural comparison
+def skeleton_attachment_profile(skeleton: TopologyGraph | nx.Graph, full: TopologyGraph | nx.Graph) -> dict[str, int]:
+    """For every skeleton node: number of *new* (non-skeleton) neighbours in ``full``.
+
+    Skeleton labels are shared between generated and target graphs, so this profile compares "which
+    skeleton nodes grow branches, and how many" without depending on the labels of new nodes.
+    """
+    sk, g = _nx(skeleton), _nx(full)
+    sk_nodes = set(sk.nodes)
+    return {u: sum(1 for v in g.neighbors(u) if v not in sk_nodes) for u in sk_nodes if u in g}
+
+
+def attachment_overlap(skeleton: TopologyGraph | nx.Graph, target: TopologyGraph | nx.Graph, generated: TopologyGraph | nx.Graph) -> tuple[float, float]:
+    """(recall %, precision %) of skeleton→new attachments as a multiset over skeleton nodes (label-free for new nodes)."""
+    pt, pg = skeleton_attachment_profile(skeleton, target), skeleton_attachment_profile(skeleton, generated)
+    inter = sum(min(pt.get(u, 0), pg.get(u, 0)) for u in set(pt) | set(pg))
+    nt, ng = sum(pt.values()), sum(pg.values())
+    return (inter / nt * 100.0 if nt else 100.0, inter / ng * 100.0 if ng else 100.0)
+
+
+def degree_histogram_emd(a: TopologyGraph | nx.Graph, b: TopologyGraph | nx.Graph, max_deg: int = 8) -> float:
+    """1-D earth mover's distance between the (normalised) degree histograms of two graphs (label-free)."""
+    import numpy as np
+
+    def hist(g: nx.Graph) -> np.ndarray:
+        h = np.zeros(max_deg + 1)
+        for _, d in g.degree():
+            h[min(d, max_deg)] += 1
+        return h / max(1, h.sum())
+
+    ha, hb = hist(_nx(a)), hist(_nx(b))
+    return float(np.abs(np.cumsum(ha) - np.cumsum(hb)).sum())
+
+
+def new_new_edge_ratio(skeleton: TopologyGraph | nx.Graph, full: TopologyGraph | nx.Graph) -> float:
+    """Share of new edges that connect two *new* nodes (corridor-like growth) vs. new→skeleton."""
+    sk_nodes = set(_nx(skeleton).nodes)
+    new_edges = [e for e in _edge_set(full) if e not in _edge_set(skeleton)]
+    if not new_edges:
+        return 0.0
+    return sum(1 for u, v in new_edges if u not in sk_nodes and v not in sk_nodes) / len(new_edges)

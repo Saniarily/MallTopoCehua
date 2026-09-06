@@ -57,6 +57,6 @@ CORPUS=/path/to/sharegpt_data.json bash scripts/run_real_data_phase4.sh
 - ✅ 阶段一：**类型条件化质量模型** E[score | 条件, 类型]（`recommend_types → recommend_within_type`）+ 硬约束过滤 + kNN 召回 + 10 种 ranker（经典 / LTR / 上下界参照 / **deep_residual** Transformer+GIN 残差融合）+ 解释 + 反事实 + 多 seed 消融
 - ✅ 阶段二：rule / search / **ar_gnn**（自回归 GNN，原型结构性保持）扩展器 + 几何解码 + 修复器 + 拓扑&几何双评估 + JSON/GeoJSON/SVG/PNG
 - ✅ 原型保真度协议、真实数据第 1–2 轮结果（`docs/experiments.md`）；36 个测试通过
-- ⏳ 待运行：第 3 轮真实实验 `run_real_data_phase4.sh`（deep_residual 比较与消融、类型模型评估、AR-GNN 训练与 4 方法比较）
+- ✅ 第 3 轮真实实验完成：deep_residual 与经典持平（残差结构是关键成分）；类型模型 best-type 一致率 100%、policy uplift +0.056；**AR-GNN v2 在结构指标上明显超过规则/搜索**（attach precision 79.7 vs 43.2）——见 `docs/experiments.md`
 - ⏳ 待实现（Phase 5）：Streamlit Viewer Hub（数据浏览 / 实验看板 / 策划工作台）、FastAPI、学习型校准器、MLflow（可选）
 详见 `docs/methodology.md`、`docs/innovation_points.md`、`docs/experiments.md`。
