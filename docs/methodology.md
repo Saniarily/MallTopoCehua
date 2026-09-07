@@ -62,17 +62,21 @@ generator: rule_expander | search_expander(16 采样取大纲指标最优) | ar_
 ```
 outline (px→m, flip_y)  →  inset = outline ⊖ 店铺纵深 d   →  medial axis (skimage skeletonize, 去毛刺)
 → CorridorFitter.fit(topology, outline, seed):
-   1) planar_corridor_embedding 取抽象平面图：外环(最长面) / 内核(2-core) / 支路 / 叶
+   1) planar_corridor_embedding 取抽象平面图：外环 = **骨架自身的环路**（仅当以它为外面的 Tutte 嵌入零交叉时；否则内核最长面）/ 内核(2-core) / 支路 / 叶
    2) 初始化：外环节点按等弧长钉在 inset 边界上(n_offsets 个相位×2 方向，靠近拐角吸附拐角)；内核 Tutte 重心；支路 BFS 沿中轴向外
    3) 松弛(iters 步, 退火步长)：外环→边界吸引；支路→中轴吸引；边方向→主墙向正交吸附；非邻接点排斥(min_spacing)；边-点净距；度 2 直通；
       每步投影回 inset；会产生交叉的移动按 1, ½, ¼, ⅛ 线搜索缩步，仍交叉则放弃（平面性硬保证）
    4) 拐角吸附；n_restarts 个候选按综合分挑最优（seed>0 时从 2n 池中抽样，实现"再试一次"）
-→ render_corridors: 边介数 → 主/次；宽度由 corridor_ratio(≈0.18) 预算反推并裁到 [3,8] m；交叉口垫片；
-   出入口 = 悬挂端/外环点向最近立面延伸(≥2 个，间距≥30 m)；被外环围出的洞(面积 ≤ atrium_area_max) = 中庭
+→ render_corridors: **骨架–骨架边 = 主走廊，其余 = 次走廊**（无骨架时退化为外环/边介数）；宽度由 corridor_ratio(≈0.18) 预算反推并裁到 [3,8] m；
+   交叉口垫片按层归属，整体闭运算(r = w/2) + 填 <60 m² 洞 + 剔碎片 → 绝不出现游离圆盘；
+   **断头路处理**：度 1 节点在 entrance_reach·w(=4w) 内可达立面 → 出入口(≥2 个，间距≥30 m)，否则 → 竖向交通核(vertical_core)；
+   被外环围出的洞(面积 ∈ [80, 900] m²，紧凑) = 中庭
 → evaluate_fit: inside_ratio / crossings / ortho_deviation / served_area / corridor_ratio / n_entrances
    + 与真实同层 M CenterPoint 对比：procrustes_rmse(带标签)、chamfer(无标签)、各自的随机基线、外环到立面距离(拟合 vs 真实)
 ```
 
-生成规则（从真实平面归纳，见 `stage3/fit.py` 顶部注释）：R1 外环走廊沿立面内侧一个店铺纵深（真实数据：0.18·√面积，IQR 0.155–0.215）；R0 **走廊在节点处的夹角 ≥ 60°**（真实网络仅 13% 的夹角小于 60°；锐角楔形放不下商铺）——松弛中的开角力 + 后处理 `open_angles`，评分含 `sharp_angle_rate`；成廊时对合并后的中心线做圆角缓冲 + 闭运算（半径 = 半廊宽），走廊读作连续光滑的带而非锯齿；R2 环内的洞是中庭，不是店铺；R3 支路垂直于所在环/主墙向；R4 走廊尽量顺主墙向、拐角处转折；R5 非邻接关键点 ≥ min_spacing（随 inset 面积/节点数自适应）；R6 拓扑不改、平面性不破；R7 走廊面积占比 ≈ 真实分布 0.12–0.25。
+生成规则（从真实平面归纳，见 `stage3/fit.py` 顶部注释）：R1 外环走廊沿立面内侧一个店铺纵深（真实数据：0.18·√面积，IQR 0.155–0.215）；R0 **走廊在节点处的夹角 ≥ 60°**（真实网络仅 13% 的夹角小于 60°；锐角楔形放不下商铺）——松弛中的开角力 + 后处理 `open_angles`，评分含 `sharp_angle_rate`；成廊时对合并后的中心线做圆角缓冲 + 闭运算（半径 = 半廊宽），走廊读作连续光滑的带而非锯齿；R2 环内的洞是中庭，不是店铺；R3 支路垂直于所在环/主墙向；R4 走廊尽量顺主墙向、拐角处转折；R5 非邻接关键点 ≥ min_spacing（随 inset 面积/节点数自适应）；R6 拓扑不改、平面性不破；R7 走廊面积占比 ≈ 真实分布 0.12–0.25；**R8 骨架边 = 主走廊（更宽），新增边 = 次走廊，骨架环 = 外环**（设计师："原型节点之间的连接通常是主要走廊"）；**R9 内部无断头路**——除首层出入口与上部楼层竖向交通核外，走廊互相连通成环（设计师反馈 + 空间句法）。
+
+目标形态分布：`scripts/corridor_morphology.py --floors-file docs/stage3_reference_floors.txt` 在 17 个设计师指定的优秀首层 `corridor_mask` 上测量主/次宽度（两均值分割）、层级长度占比、环数、断头路（出入口 / 竖向核归类）、岛数量与面积、交叉口夹角、外环距立面距离（需 Mac 上的 mask 数据）。
 
 样例（B000A0E928_1，50 个 M 点，走廊来自 `_total.csv`）：crossings 0、inside 1.0、ortho 8°、corridor 28%、2 出入口 2 中庭；chamfer 明显优于随机（测试 `tests/unit/test_stage3_corridor.py`）。**Procrustes 在细长楼层上被长轴主导（随机放置也只有 ≈0.2×对角线），报告时以 chamfer + 随机基线为主。** 全库评估需要 Mac 上的 `*_total.csv`（`scripts/preview_stage3.py` 单层；批量脚本待补）。
