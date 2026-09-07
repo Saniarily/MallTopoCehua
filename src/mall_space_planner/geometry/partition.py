@@ -41,6 +41,7 @@ class PartitionParams:
     shop_depth: float = 30.0
     anchor_area_max: float = 2500.0
     jitter: float = 0.12
+    atrium_area_max: float = 900.0  # a loop hole larger than this keeps an atrium of this size and becomes shops otherwise
 
 
 def corridor_polygon(topology: TopologyGraph, pos: dict[str, tuple[float, float]], width: float) -> Polygon | MultiPolygon:
@@ -65,10 +66,12 @@ def pick_atria(topology: TopologyGraph, pos: dict[str, tuple[float, float]], n: 
 def _split_polygon(poly: Polygon, area_max: float, min_piece: float, rng: np.random.RandomState, jitter: float, depth: int = 0) -> list[Polygon]:
     if poly.is_empty or poly.area < min_piece:
         return []
-    if poly.area <= area_max or depth > 12:
-        return [poly]
     minx, miny, maxx, maxy = poly.bounds
     w, h = maxx - minx, maxy - miny
+    # accept slightly oversized but compact pieces: cutting a compact piece in its depth direction would
+    # create a second row of shops without corridor frontage
+    if poly.area <= area_max or depth > 12 or (poly.area <= area_max * 1.25 and max(w, h) / max(min(w, h), 1e-9) < 1.6):
+        return [poly]
     frac = 0.5 + rng.uniform(-jitter, jitter)
     if w >= h:
         cut = minx + w * frac
@@ -83,6 +86,39 @@ def _split_polygon(poly: Polygon, area_max: float, min_piece: float, rng: np.ran
         for piece in _iter_polys(half):
             out.extend(_split_polygon(piece, area_max, min_piece, rng, jitter, depth + 1))
     return out
+
+
+def _split_along_frontage(poly: Polygon, segs: list[LineString], area_max: float, min_piece: float, rng: np.random.RandomState, jitter: float, depth: int = 0) -> list[Polygon]:
+    """Split a frontage-band polygon with cuts **perpendicular to its nearest corridor**, so that every
+    resulting piece keeps a share of the corridor frontage (no second row of blind shops)."""
+    if poly.is_empty or poly.area < min_piece:
+        return []
+    if poly.area <= area_max or depth > 14 or not segs:
+        return [poly]
+    c = poly.centroid
+    seg = min(segs, key=lambda s: s.distance(c))
+    (x0, y0), (x1, y1) = seg.coords[0], seg.coords[-1]
+    d = np.array([x1 - x0, y1 - y0])
+    if np.linalg.norm(d) < 1e-9:
+        return _split_polygon(poly, area_max, min_piece, rng, jitter, depth)
+    d /= np.linalg.norm(d)
+    # project the polygon onto the corridor direction; cut at the (jittered) middle of that extent
+    pts = np.array(poly.exterior.coords)
+    proj = (pts - np.array([x0, y0])) @ d
+    lo, hi = proj.min(), proj.max()
+    if hi - lo < 1e-6:
+        return [poly]
+    cut = lo + (hi - lo) * (0.5 + rng.uniform(-jitter, jitter))
+    n = np.array([-d[1], d[0]])
+    L = max(poly.bounds[2] - poly.bounds[0], poly.bounds[3] - poly.bounds[1]) * 4 + 10
+    base = np.array([x0, y0]) + d * cut
+    half_a = Polygon([base + n * L, base - n * L, base - n * L - d * L, base + n * L - d * L])
+    half_b = Polygon([base + n * L, base - n * L, base - n * L + d * L, base + n * L + d * L])
+    out: list[Polygon] = []
+    for half in (poly.intersection(half_a), poly.intersection(half_b)):
+        for piece in _iter_polys(half):
+            out.extend(_split_along_frontage(piece, segs, area_max, min_piece, rng, jitter, depth + 1))
+    return out or [poly]
 
 
 def _iter_polys(geom) -> list[Polygon]:  # noqa: ANN001
@@ -102,12 +138,43 @@ def partition_shops(
     params: PartitionParams,
     n_atria: int,
     seed: int,
+    atrium_polygons: list[Polygon] | None = None,
 ) -> tuple[list[SpaceUnit], dict[str, float]]:
-    """Return space units (corridor, atria, shops) and partition diagnostics."""
+    """Return space units (corridor, atria, shops) and partition diagnostics.
+
+    ``atrium_polygons`` (optional): explicit atrium footprints – e.g. the holes enclosed by corridor
+    loops from :func:`mall_space_planner.geometry.planar_embed.planar_corridor_embedding`. When given,
+    they replace the circular "buffer at a high-degree junction" heuristic.
+    """
     rng = np.random.RandomState(seed)
     corridors = corridor_polygon(topology, pos, params.corridor_width).intersection(site)
-    atria_nodes = pick_atria(topology, pos, n_atria)
-    atria = [Point(pos[n]).buffer(params.atrium_radius).intersection(site) for n in atria_nodes]
+    if atrium_polygons is not None:
+        atria_nodes = [f"F{i}" for i in range(len(atrium_polygons))]
+        atria = []
+        for p in atrium_polygons:
+            hole = p.buffer(-params.corridor_width / 2.0).intersection(site).buffer(0)
+            if hole.is_empty:
+                atria.append(hole)
+                continue
+            # large loop holes: keep an atrium of at most ``atrium_area_max`` in the middle (shrunk inward so a
+            # ring of inward-facing shops remains along the loop corridor); small holes become the atrium as is
+            if hole.area > params.atrium_area_max:
+                lo, hi = 0.0, float(np.sqrt(hole.area))
+                for _ in range(25):
+                    mid = (lo + hi) / 2
+                    h2 = hole.buffer(-mid)
+                    if h2.is_empty or h2.area < params.atrium_area_max:
+                        hi = mid
+                    else:
+                        lo = mid
+                shrunk = hole.buffer(-lo)
+                hole = max(_iter_polys(shrunk), key=lambda q: q.area) if not shrunk.is_empty and _iter_polys(shrunk) else hole
+            atria.append(hole)
+        keep = [(n, a) for n, a in zip(atria_nodes, atria, strict=True) if not a.is_empty and a.area > params.min_piece_area]
+        atria_nodes, atria = [n for n, _ in keep], [a for _, a in keep]
+    else:
+        atria_nodes = pick_atria(topology, pos, n_atria)
+        atria = [Point(pos[n]).buffer(params.atrium_radius).intersection(site) for n in atria_nodes]
     blocked = unary_union([corridors, *atria]) if atria else corridors
     leasable = site.difference(blocked).buffer(0)
 
@@ -116,7 +183,7 @@ def partition_shops(
         units.append(SpaceUnit(unit_id=f"C{i}", kind="corridor", polygon=[tuple(map(float, p)) for p in g.exterior.coords[:-1]], centroid=(g.centroid.x, g.centroid.y), area=float(g.area)))
     for n, g in zip(atria_nodes, atria, strict=True):
         for gg in _iter_polys(g):
-            units.append(SpaceUnit(unit_id=f"AT_{n}", kind="atrium", polygon=[tuple(map(float, p)) for p in gg.exterior.coords[:-1]], centroid=(gg.centroid.x, gg.centroid.y), area=float(gg.area), attached_to=[n]))
+            units.append(SpaceUnit(unit_id=f"AT_{n}", kind="atrium", polygon=[tuple(map(float, p)) for p in gg.exterior.coords[:-1]], centroid=(gg.centroid.x, gg.centroid.y), area=float(gg.area), attached_to=[n] if n in pos else []))
 
     segs = {(u, v): LineString([pos[u], pos[v]]) for u, v in topology.edges() if u in pos and v in pos}
     n_unreach = 0
@@ -124,9 +191,11 @@ def partition_shops(
     corridor_zone = blocked.buffer(params.max_frontage_dist)
     for region in _iter_polys(leasable):
         # Frontage band (near corridors) is cut into shops; the remainder into larger anchor units.
-        front = region.intersection(corridor_zone.buffer(params.shop_depth * 0.5)).buffer(0)
+        # frontage band depth ~ one shop depth (area_max / typical frontage), capped by shop_depth/2
+        band = min(params.shop_depth * 0.5, max(8.0, np.sqrt(params.shop_area_max) * 0.9))
+        front = region.intersection(corridor_zone.buffer(band)).buffer(0)
         deep = region.difference(front).buffer(0)
-        pieces = [(p, "shop") for f in _iter_polys(front) for p in _split_polygon(f, params.shop_area_max, params.min_piece_area, rng, params.jitter)]
+        pieces = [(p, "shop") for f in _iter_polys(front) for p in _split_along_frontage(f, list(segs.values()), params.shop_area_max, params.min_piece_area, rng, params.jitter)]
         pieces += [(p, "anchor") for d in _iter_polys(deep) for p in _split_polygon(d, params.anchor_area_max, params.min_piece_area, rng, params.jitter)]
         for piece, kind in pieces:
             piece = piece.buffer(0)

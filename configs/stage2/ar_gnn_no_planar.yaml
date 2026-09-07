@@ -1,0 +1,4 @@
+_base_: ar_gnn.yaml
+experiment_name: stage2_ar_gnn_no_planar   # ablation (v3): same checkpoint as ar_gnn, planarity guard switched off at inference
+stage2:
+  generator: {name: ar_gnn, params: {planarity_guard: false, checkpoint: outputs/checkpoints/stage2/stage2_ar_gnn}}

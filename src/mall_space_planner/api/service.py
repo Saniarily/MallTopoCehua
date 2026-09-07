@@ -68,6 +68,22 @@ class PlanningService:
         req = GenerationRequest(prototype=self.prototype(prototype_id), boundary=boundary, constraints=constraints, n_candidates=n_candidates, seed=seed)
         return self.stage2.run(req)
 
+    # ------------------------------------------------------------------ stage 3: corridor adaptation
+    def adapt_corridor(self, topology, outline_points: list[tuple[float, float]] | None = None, outline=None, seed: int = 0, shop_depth: float = 14.0, corridor_ratio: float = 0.18):  # noqa: ANN001, ANN201
+        """Fit an M key-point network (a Stage-2 result or any TopologyGraph) into an outline and render the
+        complete corridor system. ``outline_points`` = hand-drawn polygon in metres, or pass an ``Outline``.
+        Returns (FitResult, CorridorPlan, metrics)."""
+        from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, outline_from_points, render_corridors
+        from mall_space_planner.stage3.evaluate import evaluate_fit
+
+        if outline is None:
+            if not outline_points:
+                raise ValueError("adapt_corridor needs outline_points or outline")
+            outline = outline_from_points(outline_points)
+        res = CorridorFitter(FitParams(shop_depth=shop_depth)).fit(topology, outline, seed=seed)
+        plan = render_corridors(topology, res.positions, outline, res.roles, RenderParams(corridor_ratio=corridor_ratio))
+        return res, plan, evaluate_fit(topology, res, plan, outline)
+
     @staticmethod
     def export(layout: GeneratedLayout, out_dir: str | Path, stem: str = "layout", formats: tuple[str, ...] = ("json", "geojson", "svg", "png")) -> dict[str, Path]:
         out_dir = Path(out_dir)

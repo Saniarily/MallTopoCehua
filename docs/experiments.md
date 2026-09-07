@@ -139,3 +139,27 @@
 
 ## 7. 合成数据（仅流程验证）
 模型比较 / 消融 / 阶段二 / 保真度 / 类型推荐 / AR-GNN 训练与评估脚本均在合成数据上跑通；36 个测试通过；数值不具意义。
+
+## Stage-2 corpus v2 (real CSV graph triplets) — supersedes rounds 1–4 for Stage 2
+
+**Why.** `sharegpt_data.json` (rounds 1–4) turned out to be *LLM-generated* expansions, not real
+built topologies. All Stage-2 numbers in rounds 1–4 (R09–R14, F06/F07) therefore measure agreement
+with a synthetic target and are **superseded**; they are kept in `data/results_snapshot/stage2/` for
+provenance only.
+
+**Real corpus.** For every floor `{mall}_{k}` the graph export has `*_M_simplified.csv` (+ node
+attributes) = corridor skeleton (Stage-1 prototype) and `*_M.csv` = complete corridor key-point
+topology. `scripts/build_stage2_corpus.py` builds `data/processed/legacy/stage2_corpus_v2.jsonl`
+with a mall-grouped, cluster-stratified split (same protocol as Stage 1). Verified on
+`B000A0E928_1` (`tests/fixtures/graph_csv`): skeleton 25/28 → target 50/83; skeleton kept verbatim;
+planar; connected; new nodes attach to 1–4 present nodes ({1: 6, 2: 9, 3: 9, 4: 1}).
+
+**Model / decoder changes driven by the data.** AR-GNN v3 (iterative anchor/stop heads, up to 4
+anchors, planarity guard; `FEAT_VERSION=3`, old checkpoints must be retrained); rule expander gains a
+`bridge` op (new node closing a loop) and never adds skeleton–skeleton chords; geometry decoder
+`planar_corridor` (Tutte embedding of the corridor 2-core, loop holes → atria capped at
+`atrium_area_max`, branches perpendicular to the core, frontage-preserving shop split) replaces
+`corridor_partition` as default. Outline thresholds are calibrated on the ground-truth row
+(`scripts/calibrate_stage2_thresholds.py`, q=0.95) because real targets are much denser than skeletons.
+
+**Run (Mac):** `bash scripts/run_real_data_round5.sh` (or `GRAPH_DIR=... bash ...`). Results → `outputs/experiments/stage2_eval_r5/table.md`.

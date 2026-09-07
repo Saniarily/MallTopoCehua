@@ -211,12 +211,20 @@ def f05_retrieval_funnel(results: Path, out: Path) -> list[Path]:
 
 
 def _load_corpus(results: Path, n: int | None = 600):
-    from mall_space_planner.data.sharegpt_adapter import load_sharegpt
+    """Evaluation samples for the example figures. Preference: corpus v2 (real CSV-derived JSONL, test
+    split) > v1 ShareGPT (held-out tail) > synthetic stand-in."""
+    from mall_space_planner.data.corpus_builder import load_any_corpus
     from mall_space_planner.utils import resolve_config
 
-    for p in [results / "data/sharegpt_data.json", Path(resolve_config("configs/data/legacy.yaml").get("sharegpt_json") or "/nonexistent"), Path("data/samples/synthetic/sharegpt_sample.json")]:
+    cfg = resolve_config("configs/data/legacy.yaml")
+    v2 = [results / "data/stage2_corpus_v2.jsonl", Path(cfg.get("processed_dir", "data/processed/legacy")) / "stage2_corpus_v2.jsonl", Path(cfg.get("stage2_corpus") or "/nonexistent")]
+    for p in v2:
         if p.exists():
-            allsmp = load_sharegpt(p)
+            smp = load_any_corpus(p, split="test")
+            return (smp[:n] if n else smp), p
+    for p in [results / "data/sharegpt_data.json", Path(cfg.get("sharegpt_json") or "/nonexistent"), Path("data/samples/synthetic/sharegpt_sample.json")]:
+        if p.exists():
+            allsmp = load_any_corpus(p)
             return (allsmp[-n:] if n else allsmp), p
     return None, None
 
