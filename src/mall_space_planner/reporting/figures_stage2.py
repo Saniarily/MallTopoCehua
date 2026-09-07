@@ -1,4 +1,5 @@
-"""Stage-2 result figures (R09–R14) from the round-4 multi-seed table and checkpoint training histories."""
+"""Stage-2 result figures (R09–R14) from the round-5 (real corpus v2) multi-seed table and checkpoint training
+histories. Falls back to the round-4 (superseded, LLM-corpus) snapshot only if r5 files are absent."""
 from __future__ import annotations
 
 import json
@@ -12,15 +13,25 @@ from mall_space_planner.reporting.style import color_for, fig, label, load_style
 import matplotlib.pyplot as plt  # noqa: E402
 
 MAIN = ["ref_ground_truth", "stage2_rule_baseline", "stage2_search_baseline", "stage2_ar_gnn", "stage2_ar_gnn_bestof16"]
-ABL = ["stage2_ar_gnn", "stage2_ar_gnn_bfs_order", "stage2_ar_gnn_single_label", "stage2_ar_gnn_basic_feats", "stage2_ar_gnn_long"]
+# v3 ablations (round 5): growth order (bfs / greedy), single-anchor loss, planarity guard off; legacy names kept for r4 fallback
+ABL = ["stage2_ar_gnn", "stage2_ar_gnn_bfs_order", "stage2_ar_gnn_greedy_order", "stage2_ar_gnn_single_label", "stage2_ar_gnn_no_planar", "stage2_ar_gnn_basic_feats", "stage2_ar_gnn_long"]
+
+
+def _round(results: Path) -> str:
+    return "r5" if (results / "stage2/r5_summary_mean_std.csv").exists() else "r4"
 
 
 def _summary(results: Path) -> pd.DataFrame:
-    return pd.read_csv(results / "stage2/r4_summary_mean_std.csv").set_index("experiment")
+    return pd.read_csv(results / f"stage2/{_round(results)}_summary_mean_std.csv").set_index("experiment")
 
 
-def _per_seed(results: Path) -> pd.DataFrame:
-    return pd.read_csv(results / "stage2/r4_per_seed.csv")
+def _per_seed(results: Path) -> pd.DataFrame | None:
+    p = results / f"stage2/{_round(results)}_per_seed.csv"
+    return pd.read_csv(p) if p.exists() else None
+
+
+def _n_eval(results: Path) -> str:
+    return "575 个测试骨架（按商场分组的真实语料）" if _round(results) == "r5" else "600 个留出骨架"
 
 
 def _short(name: str) -> str:
@@ -31,7 +42,10 @@ def r09_overview(results: Path, out: Path) -> list[Path]:
     """2x3 panel: pass rate, ASPL dev, density dev, attach precision, degree EMD, target-edge recall — main methods."""
     df = _summary(results)
     rows = [m for m in MAIN if m in df.index]
-    metrics = ["overall_pass", "aspl_deviation_pct", "density_deviation_pct", "attach_precision_pct", "degree_emd", "target_edge_recall_pct"]
+    # On the real corpus target_edge_recall is identical for every generator (= skeleton edges / target edges, the
+    # skeleton being kept verbatim), so the 6th panel shows attach *recall* instead (r4 fallback keeps the old panel).
+    last = "attach_recall_pct" if _round(results) == "r5" else "target_edge_recall_pct"
+    metrics = ["overall_pass", "aspl_deviation_pct", "density_deviation_pct", "attach_precision_pct", "degree_emd", last]
     better = ["↑", "↓", "↓", "↑", "↓", "↑"]
     s = load_style()
     f, axes = plt.subplots(2, 3, figsize=(s["figure"]["width_double"], 4.6))
@@ -51,7 +65,7 @@ def r09_overview(results: Path, out: Path) -> list[Path]:
         ax.set_xticklabels(["真实", "规则", "规则\n+择优", "本文", "本文\n+择优"], fontsize=s["fonts"]["size_annot"])
         ax.grid(axis="x", alpha=0)
         ax.set_ylim(0, top * 1.25)
-    f.suptitle(title_for("R09") + "（600 个留出骨架，3 次随机种子）", x=0.02, ha="left", fontweight="bold")
+    f.suptitle(title_for("R09") + f"（{_n_eval(results)}，3 次随机种子）", x=0.02, ha="left", fontweight="bold")
     f.tight_layout()
     return savefig(f, out, "R09_stage2_overview")
 
@@ -62,23 +76,35 @@ def r10_attach_scatter(results: Path, out: Path) -> list[Path]:
     df = _summary(results)
     s = load_style()
     f, ax = fig("double", 0.6)
-    for name, g in ps.groupby("experiment"):
-        if name == "ref_ground_truth":
-            continue
-        ax.scatter(g["attach_recall_pct"], g["attach_precision_pct"], s=18 + 140 * (g["overall_pass"] - 0.7).clip(0, 1), color=color_for(name), alpha=0.85, edgecolor="white", lw=0.5, label=_short(name))
-    # Labels are placed in free space (data coords) with a thin leader line to the mean position, so
-    # they never sit on top of each other or on top of points.
-    ann = {
-        "stage2_rule_baseline": (44.5, 39.0, "left"),
-        "stage2_search_baseline": (46.5, 45.5, "left"),
-        "stage2_ar_gnn_greedy": (42.0, 87.5, "left"),
-        "stage2_ar_gnn": (52.0, 82.5, "right"),
-        "stage2_ar_gnn_bestof16": (57.0, 68.5, "left"),
-        "stage2_ar_gnn_long": (66.0, 82.5, "center"),
-        "stage2_ar_gnn_bfs_order": (68.5, 79.5, "right"),
-        "stage2_ar_gnn_basic_feats": (68.5, 69.0, "right"),
-        "stage2_ar_gnn_single_label": (49.0, 72.5, "left"),
+    shown = [n for n in df.index if n != "ref_ground_truth"]
+    if ps is not None:
+        for name, g in ps.groupby("experiment"):
+            if name == "ref_ground_truth":
+                continue
+            ax.scatter(g["attach_recall_pct"], g["attach_precision_pct"], s=18 + 140 * (g["overall_pass"] - 0.7).clip(0, 1), color=color_for(name), alpha=0.85, edgecolor="white", lw=0.5, label=_short(name))
+        note = "每个点 = 一次随机种子的评估；标注 = 各方法的均值位置"
+    else:  # only mean ± std available: one point per method with error bars
+        for name in shown:
+            ax.errorbar(df.loc[name, "attach_recall_pct_mean"], df.loc[name, "attach_precision_pct_mean"], xerr=df.loc[name, "attach_recall_pct_std"], yerr=df.loc[name, "attach_precision_pct_std"],
+                        fmt="o", ms=5 + 9 * float(np.clip(df.loc[name, "overall_pass_mean"] - 0.5, 0, 0.5)) * 2, color=color_for(name), ecolor=color_for(name), elinewidth=0.9, capsize=2.5, alpha=0.9, mec="white", mew=0.5)
+        note = "点 = 3 次随机种子的均值，误差线 = ±1 标准差"
+    # Labels in free space (data coords) with a leader line to the mean; positions chosen once per results round.
+    ann_r5 = {
+        "stage2_rule_baseline": (34.0, 30.0, "left"),
+        "stage2_search_baseline": (46.0, 34.5, "left"),
+        "stage2_ar_gnn_greedy": (41.0, 85.5, "left"),
+        "stage2_ar_gnn": (74.0, 78.0, "left"),
+        "stage2_ar_gnn_bestof16": (55.0, 76.5, "left"),
+        "stage2_ar_gnn_bfs_order": (74.0, 66.5, "left"),
+        "stage2_ar_gnn_greedy_order": (52.0, 62.0, "left"),
+        "stage2_ar_gnn_no_planar": (74.0, 72.0, "left"),
+        "stage2_ar_gnn_single_label": (84.0, 48.0, "center"),
     }
+    ann_r4 = {
+        "stage2_rule_baseline": (44.5, 39.0, "left"), "stage2_search_baseline": (46.5, 45.5, "left"), "stage2_ar_gnn_greedy": (42.0, 87.5, "left"), "stage2_ar_gnn": (52.0, 82.5, "right"),
+        "stage2_ar_gnn_bestof16": (57.0, 68.5, "left"), "stage2_ar_gnn_long": (66.0, 82.5, "center"), "stage2_ar_gnn_bfs_order": (68.5, 79.5, "right"), "stage2_ar_gnn_basic_feats": (68.5, 69.0, "right"), "stage2_ar_gnn_single_label": (49.0, 72.5, "left"),
+    }
+    ann = ann_r5 if _round(results) == "r5" else ann_r4
     for name, (tx, ty, ha) in ann.items():
         if name not in df.index:
             continue
@@ -88,9 +114,13 @@ def r10_attach_scatter(results: Path, out: Path) -> list[Path]:
     ax.set_xlabel(label("metrics", "attach_recall_pct") + "  — 真实分支位置被找到的比例")
     ax.set_ylabel(label("metrics", "attach_precision_pct") + "  — 生成分支位置正确的比例")
     ax.set_title(title_for("R10") + "（点越大 = 大纲合格率越高）", loc="left", fontweight="bold")
-    ax.set_xlim(30, 72)
-    ax.set_ylim(35, 92)
-    ax.text(0.98, 0.03, "每个点 = 一次随机种子的评估；标注 = 各方法的均值位置", transform=ax.transAxes, ha="right", va="bottom", fontsize=s["fonts"]["size_annot"], color="#666")
+    if _round(results) == "r5":
+        ax.set_xlim(30, 92)
+        ax.set_ylim(25, 92)
+    else:
+        ax.set_xlim(30, 72)
+        ax.set_ylim(35, 92)
+    ax.text(0.98, 0.03, note, transform=ax.transAxes, ha="right", va="bottom", fontsize=s["fonts"]["size_annot"], color="#666")
     return savefig(f, out, "R10_stage2_attach_recall_precision")
 
 
@@ -107,7 +137,7 @@ def r11_decoding_tradeoff(results: Path, out: Path) -> list[Path]:
     b2 = ax2.bar(x + w / 2, df.loc[rows, "aspl_deviation_pct_mean"], w, yerr=df.loc[rows, "aspl_deviation_pct_std"], color=s["palette"]["main"][1], edgecolor="white", capsize=3, label="平均步行路径偏差 (%)")
     ax.plot(x, df.loc[rows, "attach_precision_pct_mean"], "D-", color=s["palette"]["highlight"], ms=6, lw=1.4, label="分支位置正确率 (%)")
     ax.set_ylim(0, 128)  # head-room for the legend above the bars
-    ax2.set_ylim(0, 48)
+    ax2.set_ylim(0, max(48.0, float((df.loc[rows, "aspl_deviation_pct_mean"] + df.loc[rows, "aspl_deviation_pct_std"]).max()) * 1.3))
     ax2.grid(False)
     ax2.spines["right"].set_visible(True)
     ax.set_xticks(x)
@@ -124,14 +154,15 @@ def r11_decoding_tradeoff(results: Path, out: Path) -> list[Path]:
 def r12_ablation(results: Path, out: Path) -> list[Path]:
     df = _summary(results)
     rows = [r for r in ABL if r in df.index]
-    metrics = [("attach_precision_pct", "↑"), ("target_edge_recall_pct", "↑"), ("degree_emd", "↓")]
+    mid = "attach_recall_pct" if _round(results) == "r5" else "target_edge_recall_pct"
+    metrics = [("attach_precision_pct", "↑"), (mid, "↑"), ("degree_emd", "↓")]
     s = load_style()
     f, axes = plt.subplots(1, 3, figsize=(s["figure"]["width_double"], 2.9), sharey=True)
     y = np.arange(len(rows))
     for ax, (m, b) in zip(axes, metrics):
         vals = df.loc[rows, m + "_mean"].values
         errs = df.loc[rows, m + "_std"].values
-        cols = [s["palette"]["highlight"] if r == "stage2_ar_gnn" else (s["palette"]["main"][2] if "long" in r else s["palette"]["baseline"]) for r in rows]
+        cols = [s["palette"]["highlight"] if r == "stage2_ar_gnn" else (s["palette"]["main"][2] if ("long" in r or "no_planar" in r) else s["palette"]["baseline"]) for r in rows]
         ax.barh(y, vals, xerr=errs, color=cols, edgecolor="white", capsize=3, height=0.62)
         for yy, v, e in zip(y, vals, errs):
             ax.text(v + e + (0.01 if m == "degree_emd" else 0.6), yy, f"{v:.2f}" if m == "degree_emd" else f"{v:.1f}", va="center", fontsize=s["fonts"]["size_annot"])
@@ -149,8 +180,12 @@ def r12_ablation(results: Path, out: Path) -> list[Path]:
 
 
 def r13_training_curves(results: Path, out: Path) -> list[Path]:
-    ck = results / "stage2/checkpoints"
-    runs = [("ar_gnn_v1", "第一版（失败对照）"), ("ar_gnn", "本文模型"), ("ar_gnn_long", "大模型 20 轮"), ("ar_gnn_bfs_order", "消融：广度优先顺序"), ("ar_gnn_single_label", "消融：单一接点"), ("ar_gnn_basic_feats", "消融：去结构特征")]
+    if (results / "stage2/checkpoints_r5").exists():
+        ck = results / "stage2/checkpoints_r5"
+        runs = [("ar_gnn", "本文模型（语料生长顺序）"), ("ar_gnn_greedy_order", "消融：贪心生长顺序"), ("ar_gnn_bfs_order", "消融：广度优先生长顺序"), ("ar_gnn_single_label", "消融：只认单一接点")]
+    else:
+        ck = results / "stage2/checkpoints"
+        runs = [("ar_gnn_v1", "第一版（失败对照）"), ("ar_gnn", "本文模型"), ("ar_gnn_long", "大模型 20 轮"), ("ar_gnn_bfs_order", "消融：广度优先顺序"), ("ar_gnn_single_label", "消融：单一接点"), ("ar_gnn_basic_feats", "消融：去结构特征")]
     s = load_style()
     f, (a1, a2) = plt.subplots(1, 2, figsize=(s["figure"]["width_double"], 3.0))
     for i, (name, lab) in enumerate(runs):
@@ -169,9 +204,12 @@ def r13_training_curves(results: Path, out: Path) -> list[Path]:
     a2.set_xlabel("训练轮次")
     a2.set_ylabel("接点预测准确率 (%)")
     a2.set_title("(b) 验证集：下一节点接到哪里 预测正确率", loc="left", fontsize=s["fonts"]["size_label"])
-    a2.axhline(5.4, color="#999", lw=0.8, ls=":")
-    a2.text(1, 6.2, "随机猜测 ≈ 5%", fontsize=s["fonts"]["size_annot"], color="#777")
-    a2.legend(fontsize=s["fonts"]["size_annot"], loc="center right")
+    # chance level = 1 / mean number of present nodes at a step (real corpus: ~30 present nodes -> ~3%)
+    chance = 3.3 if _round(results) == "r5" else 5.4
+    a2.axhline(chance, color="#999", lw=0.8, ls=":")
+    a2.text(1, chance + 0.8, f"随机猜测 ≈ {chance:.0f}%", fontsize=s["fonts"]["size_annot"], color="#777")
+    a2.set_ylim(0, None)
+    a2.legend(fontsize=s["fonts"]["size_annot"], loc="lower right", bbox_to_anchor=(1.0, 0.12), framealpha=0.9)
     f.suptitle(title_for("R13"), x=0.02, ha="left", fontweight="bold")
     f.tight_layout()
     return savefig(f, out, "R13_stage2_training_curves")
@@ -188,7 +226,7 @@ def r14_growth_pattern(results: Path, out: Path) -> list[Path]:
     a1.bar(x, df.loc[rows, "new_new_ratio_gen_mean"], yerr=df.loc[rows, "new_new_ratio_gen_std"], color=[color_for(r) for r in rows], edgecolor="white", capsize=3, width=0.64)
     a1.axhline(gt, color=s["palette"]["ground_truth"], ls="--", lw=1.2)
     a1.text(-0.4, gt + 0.015, f"真实建成拓扑 {gt:.2f}", ha="left", fontsize=s["fonts"]["size_annot"], color=s["palette"]["ground_truth"])
-    a1.set_ylim(0, 0.62)
+    a1.set_ylim(0, max(0.62, float((df.loc[rows, "new_new_ratio_gen_mean"] + df.loc[rows, "new_new_ratio_gen_std"]).max()) * 1.35))
     a1.set_ylabel("新节点之间连边的比例")
     a1.set_title("(a) 走廊式生长 vs 全部挂回骨架", loc="left", fontsize=s["fonts"]["size_label"])
     a2.bar(x, df.loc[rows, "degree_emd_mean"], yerr=df.loc[rows, "degree_emd_std"], color=[color_for(r) for r in rows], edgecolor="white", capsize=3, width=0.64)

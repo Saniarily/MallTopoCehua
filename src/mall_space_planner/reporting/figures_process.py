@@ -350,8 +350,12 @@ def f06b_generation_gallery(results: Path, out: Path, per_type: int = 3, per_pag
     for page in range(0, len(picks), per_page):
         chunk = picks[page : page + per_page]
         nrow = (len(chunk) + 1) // 2
-        f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 2.0 * nrow + 0.9))
-        gs = f.add_gridspec(nrow, 7, width_ratios=[1, 1, 1, 0.18, 1, 1, 1], hspace=0.55, wspace=0.12, left=0.02, right=0.98, top=0.90, bottom=0.07)
+        fig_h = 2.0 * nrow + 0.9
+        f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, fig_h))
+        # title band / legend band as absolute heights (inches) so short pages (1-2 rows) never collide with panel titles
+        top = 1.0 - 0.75 / fig_h
+        bottom = 0.42 / fig_h
+        gs = f.add_gridspec(nrow, 7, width_ratios=[1, 1, 1, 0.18, 1, 1, 1], hspace=0.55, wspace=0.12, left=0.02, right=0.98, top=top, bottom=bottom)
         for i, smp in enumerate(chunk):
             rr, cc = divmod(i, 2)
             base = 0 if cc == 0 else 4
@@ -373,7 +377,7 @@ def f06b_generation_gallery(results: Path, out: Path, per_type: int = 3, per_pag
                 ax = f.add_subplot(gs[rr, base + k])
                 draw_topology(ax, G, sk_nodes, pos=pos, title=ttl, seed=i, size_ref_n=max(n_t, smp.target.num_nodes), frame=frame)
         f.legend(handles=legend_handles(), loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0), fontsize=s["fonts"]["size_annot"])
-        f.suptitle(f"{title_for('F06')}（补充示例 {page // per_page + 1}：骨架 → {gen_name} → 真实建成）", x=0.02, ha="left", fontweight="bold")
+        f.suptitle(f"{title_for('F06')}（补充示例 {page // per_page + 1}：骨架 → {gen_name} → 真实建成）", x=0.02, y=1.0 - 0.18 / fig_h, ha="left", va="top", fontweight="bold")
         written += savefig(f, out, f"F06b_generation_gallery_{page // per_page + 1}")
     return written
 
@@ -415,7 +419,8 @@ def f07_autoregressive_steps(results: Path, out: Path, n_steps: int = 7) -> list
             present.append(v)
             nbrs = [u for u in tg.neighbors(v) if u in present[:-1]]
             hl = [(u, v) for u in nbrs]
-            ttl = f"第 {i} 步：新单元 {v} 接到 {'、'.join(nbrs)}" + ("\n（形成环路）" if len(hl) > 1 else "")
+            # two short lines: panels are narrow, one long line would run into the neighbouring panel's title
+            ttl = f"第 {i} 步：新单元 {v}\n接到 {'、'.join(nbrs)}" + ("（形成环路）" if len(hl) > 1 else "")
         G = tg.subgraph(present).copy()
         draw_topology(axes[i], G, sk_nodes, pos={k: pos[k] for k in G.nodes}, title=ttl, highlight_edges=hl, seed=0, size_ref_n=len(shown), frame=frame_steps, node_scale=1.15)
     # final: full target in its own (larger) frame
