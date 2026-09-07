@@ -40,6 +40,10 @@ def main() -> None:
     p.add_argument("--out", default="outputs/experiments/stage3_eval"); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-transfer", action="store_true"); p.add_argument("--restarts", type=int, default=4); p.add_argument("--iters", type=int, default=100)
     a = p.parse_args(); setup_logging(a.log_level); cfg = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT)
+    try:
+        import PIL, skimage  # noqa: F401  (fail fast instead of 200 identical error rows)
+    except ImportError as exc:
+        raise SystemExit(f"Stage 3 needs Pillow + scikit-image: pip install pillow scikit-image  ({exc})") from exc
     s3 = Stage3Paths.from_config(cfg); ds = Stage3Dataset(s3)
     if s3.graph_dir is None:
         raise SystemExit("dataset.params.graph_dir missing in config")

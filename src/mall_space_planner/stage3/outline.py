@@ -102,30 +102,41 @@ def outline_from_mask(path: str | Path, area_m2: float | None = None, simplify_p
     """Largest connected blob of a black/white mask PNG → Outline. Foreground = the minority colour
     unless the image is mostly foreground; both conventions are handled by picking the blob that does not
     touch all four image borders."""
-    import cv2
+    try:
+        from PIL import Image
+        from skimage.measure import find_contours, label as sk_label, regionprops
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("Stage 3 needs Pillow and scikit-image: pip install pillow scikit-image (or conda install -c conda-forge scikit-image pillow)") from exc
 
-    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    if img is None:
+    p = Path(path)
+    if not p.exists():
         raise FileNotFoundError(path)
-    _, bw = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
-    best = None
-    for fg in (bw, 255 - bw):
-        contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in contours:
-            if len(c) < 4:
+    img = np.asarray(Image.open(p).convert("L"))
+    bw = img > 127
+    H, W = bw.shape
+    best: tuple[float, Polygon] | None = None
+    for fg in (bw, ~bw):
+        lab = sk_label(fg, connectivity=1)
+        for rp in regionprops(lab):
+            if rp.area < 16:
                 continue
-            x, y, w, h = cv2.boundingRect(c)
-            touches = (x <= 0) + (y <= 0) + (x + w >= fg.shape[1]) + (y + h >= fg.shape[0])
+            minr, minc, maxr, maxc = rp.bbox
+            touches = (minr <= 0) + (minc <= 0) + (maxr >= H) + (maxc >= W)
             if touches >= 3:
-                continue  # background blob
-            a = cv2.contourArea(c)
-            if best is None or a > best[0]:
-                best = (a, c)
+                continue  # background blob (mask convention: outline does not touch three image borders)
+            mask = np.pad(lab == rp.label, 1)
+            for c in find_contours(mask.astype(float), 0.5):
+                if len(c) < 4:
+                    continue
+                poly = Polygon(np.c_[c[:, 1] - 1, c[:, 0] - 1]).buffer(0)  # (row, col) -> (x, y)
+                poly = _largest(poly)
+                if not poly.is_empty and (best is None or poly.area > best[0]):
+                    best = (poly.area, poly)
     if best is None:
         raise ValueError(f"no outline blob found in {path}")
-    poly = Polygon(best[1].reshape(-1, 2)).buffer(0)
+    poly = best[1]
     m_per_px, src = scale_from_area(poly.area, area_m2)
-    return _finish(_largest(poly), m_per_px, src, str(path), simplify_px, keep_holes)
+    return _finish(poly, m_per_px, src, str(path), simplify_px, keep_holes)
 
 
 def read_total_csv(path: str | Path) -> pd.DataFrame:

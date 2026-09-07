@@ -111,3 +111,24 @@ def test_stage3_dataset_csv_and_outline_loader(tmp_path) -> None:  # noqa: ANN00
     assert src == "main_table_area" and abs(mpp - 0.5) < 1e-9
     sims = ds.similar_outlines(67568 * 0.25, k=3, exclude_mall="B000A0E928")
     assert sims and all(not s.startswith("B000A0E928") for s in sims)
+
+
+def test_outline_from_mask_png(tmp_path) -> None:  # noqa: ANN001
+    from PIL import Image
+
+    from mall_space_planner.stage3.outline import outline_from_mask
+
+    # L-shaped white region on black, like outer_mask/*.png (255 inside)
+    img = np.zeros((200, 300), np.uint8)
+    img[40:160, 30:270] = 255
+    img[100:160, 150:270] = 0
+    p = tmp_path / "X_1_0.png"
+    Image.fromarray(img).save(p)
+    o = outline_from_mask(p, area_m2=None)
+    assert o.polygon.is_valid and o.scale_source == "default"
+    # area in px ~ 240*120 - 120*60 = 21600 -> m² at 0.5 m/px
+    assert abs(o.area - 21600 * 0.25) / (21600 * 0.25) < 0.03
+    # inverted convention (0 inside) gives the same shape
+    Image.fromarray(255 - img).save(p)
+    o2 = outline_from_mask(p)
+    assert abs(o2.area - o.area) / o.area < 0.03
