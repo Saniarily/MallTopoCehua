@@ -493,45 +493,149 @@ def _service_for_worked_example(results: Path):
     return PlanningService(db, s1, s2), db, is_real
 
 
-def f09_worked_example(results: Path, out: Path) -> list[Path]:
-    """End-to-end on one query: type ranking -> Top-5 prototypes (drawn) -> generated topology -> floor-plan draft."""
-    from mall_space_planner.reporting.graphdraw import draw_topology
-    from mall_space_planner.schemas import ConstraintSet, PlanningCondition, SiteBoundary
-    from mall_space_planner.topology.convert import to_networkx
+def _draw_shapely(ax, geom, **kw):  # noqa: ANN001
     from matplotlib.patches import Polygon as MplPolygon
+
+    for p in getattr(geom, "geoms", [geom]):
+        if p.is_empty:
+            continue
+        ax.add_patch(MplPolygon(np.array(p.exterior.coords), closed=True, **kw))
+        for r in p.interiors:
+            ax.add_patch(MplPolygon(np.array(r.coords), closed=True, fc="white", ec=kw.get("ec", "none"), lw=kw.get("lw", 0.5)))
+
+
+def _stage3_context(results: Path, floor_id: str, mall_id: str, area_hint: float | None):
+    """Stage-3 inputs for the worked example: the prototype floor's complete real network (if its *_M.csv is
+    reachable), the Stage3Dataset (masks / dataset_0.csv) and candidate outlines of similar size."""
+    from mall_space_planner.data.corpus_builder import load_target_csv
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+    from mall_space_planner.utils import resolve_config
+
+    cfg = resolve_config("configs/data/legacy.yaml")
+    paths = Stage3Paths.from_config(cfg)
+    ds = Stage3Dataset(paths)
+    real_full = None
+    used_fid = floor_id
+    dirs = [d for d in [paths.graph_dir, results / "data/graph_csv", Path("tests/fixtures/graph_csv")] if d and d.exists()]
+    for d in dirs:
+        if (d / f"{floor_id}_M.csv").exists():
+            real_full = load_target_csv(d / f"{floor_id}_M.csv")
+            paths.graph_dir = d
+            break
+    if real_full is None:  # sandbox / synthetic DB: fall back to the bundled real sample floor
+        for d in dirs:
+            ms = sorted(d.glob("*_M.csv"))
+            ms = [m for m in ms if not m.name.endswith("_M_simplified.csv")]
+            if ms:
+                used_fid = ms[0].name[: -len("_M.csv")]
+                real_full = load_target_csv(ms[0])
+                paths.graph_dir = d
+                break
+    # candidate outlines: similar pixel area, other malls; else the floor's own outline; else none
+    cands: list[str] = []
+    if area_hint:
+        cands = [c for c in ds.similar_outlines(area_hint, k=8, exclude_mall=mall_id) if paths.outline_mask(c) or paths.total_csv(c)][:3]
+    own = used_fid if (paths.outline_mask(used_fid) or paths.total_csv(used_fid)) else None
+    return ds, paths, real_full, used_fid, cands, own
+
+
+def f09_worked_example(results: Path, out: Path) -> list[Path]:
+    """End-to-end on one query, following the three-stage workflow:
+    (a) conditions -> (b) Stage 1 type ranking -> (c) Top-3 prototypes (skeletons)
+    (d) Stage 2: designer picks #1 -> AR-GNN (+16) expands the skeleton to a complete key-point network, shown next to
+        the *real built* complete network of the same floor (fair reference; attach precision reported)
+    (e) Stage 3: pick an outline (real floors of similar size or hand-drawn) -> the generated network is fitted inside
+        -> one click turns it into a corridor system (main / secondary widths, entrances, atria). No shop partition."""
+    from mall_space_planner.data.legacy_adapter import split_floor_id
+    from mall_space_planner.reporting.graphdraw import draw_topology, frame_of, full_layout, legend_handles, skeleton_layout
+    from mall_space_planner.schemas import ConstraintSet, PlanningCondition, SiteBoundary, TopologyPrototype
+    from mall_space_planner.stage2.base import GenerationRequest
+    from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, outline_from_points, render_corridors
+    from mall_space_planner.topology.convert import to_networkx
+    from mall_space_planner.topology.metrics import attachment_overlap
+    from matplotlib.patches import Patch
 
     svc, db, is_real = _service_for_worked_example(results)
     if svc is None:
         return []
     s = load_style()
-    # a representative query: median conditions of cluster 2 in the DB
+    # ---- Stage 1 -----------------------------------------------------------------------------------------------
     df = db.cases
     med = df[df["city_cluster"] == 2][db.query_cols].median() if (df["city_cluster"] == 2).any() else df[db.query_cols].median()
     q = PlanningCondition(city_cluster=2, **{c: float(med[c]) for c in db.query_cols})
     types = svc.recommend_types(q)
     top_type = types.recommendations[0].layout_type if types and types.recommendations else None
-    recs = svc.recommend_within_type(q, top_type, top_k=5) if top_type else svc.recommend(q, top_k=5, with_counterfactuals=False)
+    recs = svc.recommend_within_type(q, top_type, top_k=3) if top_type else svc.recommend(q, top_k=3, with_counterfactuals=False)
     proto = recs[0]
-    n_sk = db.get_graph(proto.prototype_id).num_nodes
-    n_t = max(int(n_sk * 1.8), n_sk + 8)
-    gens = svc.generate(proto.prototype_id, SiteBoundary.rectangle(180, 120), ConstraintSet(target_num_nodes=n_t, target_num_shops=n_t, shop_area_min=60, shop_area_max=300), n_candidates=1, seed=0)
-    layout, ev = gens[0]
+    mall_id, _ = split_floor_id(proto.prototype_id)
+    row = df[df[db.id_col] == proto.prototype_id]
+    area_hint = None
+    if not row.empty and "total_area" in row and pd.notna(row.iloc[0]["total_area"]):
+        n_fl = int((df["mall_id"] == mall_id).sum()) if "mall_id" in df else 1
+        area_hint = float(row.iloc[0]["total_area"]) / max(n_fl, 1)
+    # ---- Stage 2 (+ real reference) -----------------------------------------------------------------------------
+    ds, paths, real_full, used_fid, cand_fids, own_fid = _stage3_context(results, proto.prototype_id, mall_id, area_hint)
+    demo_floor = used_fid != proto.prototype_id
+    if demo_floor:  # sandbox: skeleton of the bundled sample floor
+        from mall_space_planner.data.legacy_adapter import load_graph_csv
 
-    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 8.0))
-    # rows: (a)+(b) | caption band | (c) prototypes | caption band | (d)+(e)
-    gs = f.add_gridspec(5, 10, height_ratios=[1.05, 0.16, 0.85, 0.16, 1.6], hspace=0.35, wspace=0.6, left=0.04, right=0.98, top=0.93, bottom=0.08)
+        sk = load_graph_csv(paths.graph_dir / f"{used_fid}_M_simplified.csv", paths.graph_dir / f"{used_fid}_M_simplified_node_attributes.csv")
+    else:
+        sk = db.get_graph(proto.prototype_id)
+    rule, search, ar = _generators(results)
+    gen = ar or search
+    gen_name = "自回归图网络 + 16 次择优（本文）" if ar else "规则 + 16 次择优（无 AR-GNN 检查点时的替代）"
+    n_t = real_full.num_nodes if real_full is not None else max(int(sk.num_nodes * 1.8), sk.num_nodes + 8)
+    req = GenerationRequest(prototype=TopologyPrototype(prototype_id=used_fid, graph=sk, layout_type=proto.layout_type if hasattr(proto, "layout_type") else None), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t), seed=0)
+    g_gen = gen.generate(req, 0)
+    ap = attachment_overlap(sk, real_full, g_gen)[1] if real_full is not None else None
+    sk_nodes = set(sk.nodes)
+    sk_pos = skeleton_layout(to_networkx(sk), seed=0)
+    G_gen = to_networkx(g_gen)
+    p_gen = full_layout(G_gen, sk_nodes, sk_pos, seed=0)
+    G_real = to_networkx(real_full) if real_full is not None else None
+    p_real = full_layout(G_real, sk_nodes, sk_pos, seed=0) if G_real is not None else None
+    frame2 = frame_of(sk_pos, p_gen, *( [p_real] if p_real else []))
+    # ---- Stage 3 -----------------------------------------------------------------------------------------------
+    outlines: list[tuple[str, object]] = []
+    for c in cand_fids:
+        try:
+            outlines.append((f"真实楼层 {c}", ds.outline(c)))
+        except Exception:  # noqa: BLE001
+            pass
+    if not outlines and own_fid:
+        try:
+            outlines.append((f"真实楼层 {own_fid}", ds.outline(own_fid)))
+        except Exception:  # noqa: BLE001
+            pass
+    # hand-drawn option, sized to the target area
+    A = (outlines[0][1].area if outlines else (area_hint or 15000.0))
+    kx = float(np.sqrt(A / (160 * 110 - 60 * 50)))
+    hand = outline_from_points([(0, 0), (160 * kx, 0), (160 * kx, 60 * kx), (100 * kx, 60 * kx), (100 * kx, 110 * kx), (0, 110 * kx)])
+    outlines.append(("设计师手绘轮廓", hand))
+    chosen_i = 0
+    outline = outlines[chosen_i][1]
+    fitter = CorridorFitter(FitParams(n_restarts=4, iters=100))
+    res = fitter.fit(g_gen, outline, seed=0)
+    plan = render_corridors(g_gen, res.positions, outline, res.roles, RenderParams())
+    d3 = plan.diagnostics
+
+    # ---- figure --------------------------------------------------------------------------------------------------
+    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 11.0))
+    gs = f.add_gridspec(6, 12, height_ratios=[1.0, 0.14, 1.05, 0.14, 1.35, 0.02], hspace=0.30, wspace=0.5, left=0.04, right=0.98, top=0.94, bottom=0.06)
     # (a) conditions
     ax = f.add_subplot(gs[0, 0:3])
     ax.axis("off")
-    def fmt(c):
+
+    def fmt(c):  # noqa: ANN001, ANN202
         v = med[c]
         return f"{v:,.0f}" if v >= 100 else f"{v:.2f}"
-    lines = [f"{label('conditions', c)}：{fmt(c)}" for c in db.query_cols]
+
     ax.text(0, 1.10, "(a) 输入：待策划项目的外部条件", va="top", fontsize=s["fonts"]["size_label"], fontweight="bold")
     ax.text(0, 0.96, f"（{label('clusters', '2')} 的中位条件）", va="top", fontsize=s["fonts"]["size_annot"], color="#555")
-    ax.text(0, 0.84, "\n".join(lines), va="top", fontsize=s["fonts"]["size_annot"], linespacing=1.45)
+    ax.text(0, 0.84, "\n".join(f"{label('conditions', c)}：{fmt(c)}" for c in db.query_cols), va="top", fontsize=s["fonts"]["size_annot"], linespacing=1.45)
     # (b) type ranking
-    ax = f.add_subplot(gs[0, 4:10])
+    ax = f.add_subplot(gs[0, 4:8])
     if types:
         rows = types.recommendations
         y = np.arange(len(rows))
@@ -540,50 +644,78 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
         ax.scatter([r.expected_score for r in rows], y, color=cols, s=30, zorder=3)
         xmax = max(rr.ci_high for rr in rows); xmin = min(rr.ci_low for rr in rows)
         for yy, r in zip(y, rows):
-            ax.text(xmax + (xmax - xmin) * 0.04, yy, f"可比案例 {r.n_comparable_cases} 个", va="center", fontsize=s["fonts"]["size_annot"], color="#555")
-        ax.set_xlim(xmin - (xmax - xmin) * 0.08, xmax + (xmax - xmin) * 0.45)
+            ax.text(xmax + (xmax - xmin) * 0.04, yy, f"可比 {r.n_comparable_cases}", va="center", fontsize=s["fonts"]["size_annot"], color="#555")
+        ax.set_xlim(xmin - (xmax - xmin) * 0.08, xmax + (xmax - xmin) * 0.42)
         ax.set_yticks(y)
-        ax.set_yticklabels([r.layout_type for r in rows])
+        ax.set_yticklabels([r.layout_type for r in rows], fontsize=s["fonts"]["size_annot"])
         ax.invert_yaxis()
-        ax.set_xlabel("期望综合评分（线段 = 80% 置信区间）")
-        ax.set_title(f"(b) 阶段一 ①：每种布局类型的预期评分 → 首选「{top_type}」", loc="left", fontsize=s["fonts"]["size_label"], fontweight="bold", pad=8)
+        ax.set_xlabel("期望综合评分（线段 = 80% 置信区间）", fontsize=s["fonts"]["size_annot"])
+        ax.set_title("(b) 阶段一 ①：布局类型预期评分（红 = 首选）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5, fontweight="bold", pad=6)
         ax.grid(axis="y", alpha=0)
-    # (c) top-5 prototypes
-    for i, r in enumerate(recs[:5]):
-        ax = f.add_subplot(gs[2, 2 * i : 2 * i + 2])
+    # (c) top-3 prototypes: share the right 4 grid columns via a nested gridspec
+    gs_c = gs[0, 8:12].subgridspec(1, 3, wspace=0.3)
+    for i, r in enumerate(recs[:3]):
+        ax = f.add_subplot(gs_c[0, i])
         g = db.get_graph(r.prototype_id)
         if g is None:
             ax.axis("off")
             continue
-        sim = f"\n相似度 {r.similarity:.2f}" if r.similarity is not None else ""
-        draw_topology(ax, to_networkx(g), set(), title=f"#{r.rank}  评分 {r.quality_score:.2f}{sim}", seed=i, node_scale=0.75)
-    # row captions live in dedicated spacer rows (never collide with panel titles)
-    for row, txt in ((1, f"(c) 阶段一 ②–④：「{top_type}」内检索到的 Top-5 可比案例原型（同类城市 · 同面积档 · 其他商场；按预测质量排序）"),
-                     (3, f"(d) 阶段二 ⑤：以 #1 为骨架扩展到 {layout.topology.num_nodes} 单元（大纲 5 项判据：{'全部合格' if ev.overall_pass else '未全部合格'}）　　(e) 阶段二 ⑥–⑦：180 m × 120 m 场地内的平面布局草案")):
-        cap = f.add_subplot(gs[row, :])
+        sim = f"\n相似 {r.similarity:.2f}" if r.similarity is not None else ""
+        draw_topology(ax, to_networkx(g), set(), title=f"#{r.rank}  评分 {r.quality_score:.1f}{sim}", seed=i, node_scale=0.6)
+        if i == 0:
+            for sp in ax.spines.values():
+                sp.set_visible(True); sp.set_edgecolor(s["palette"]["highlight"]); sp.set_linewidth(1.4)
+    # captions (dedicated spacer rows)
+    for row_i, txt in ((1, f"(c) 上排右侧：阶段一 ②–④ 「{top_type}」内检索到的 Top-3 可比案例原型（红框 = 设计师选定的 #1）　　"
+                           f"(d) 阶段二 ⑤：以 #1 为骨架扩展为完整走廊关键点网络（{n_t} 单元），右侧为**同一楼层真实建成**的完整网络作对照"
+                           + ("（沙箱示意：改用样例层 " + used_fid + "）" if demo_floor else "")),
+                       (3, f"(e) 阶段三 ⑥–⑧：选外轮廓（面积相近的真实楼层 / 手绘）→ 网络自适应嵌入（外环沿立面内侧、支路垂直、无交叉）→ 一键成廊（主/次廊、{d3['n_entrances']} 出入口、{d3['n_atria']} 中庭；商铺分区留给设计师）")):
+        cap = f.add_subplot(gs[row_i, :])
         cap.axis("off")
-        cap.text(0, 0.0, txt, ha="left", va="bottom", transform=cap.transAxes, fontsize=s["fonts"]["size_label"], fontweight="bold")
-    # (d) generated topology + (e) plan
+        cap.text(0, 0.0, txt.replace("**", ""), ha="left", va="bottom", transform=cap.transAxes, fontsize=s["fonts"]["size_label"], fontweight="bold")
+    # (d) skeleton | generated | real
+    panels = [(to_networkx(sk), sk_pos, f"骨架 = 原型 #1\n{sk.num_nodes} 单元 / {len(sk.edges())} 连接"),
+              (G_gen, p_gen, f"{gen_name}\n{g_gen.num_nodes} 单元 / {G_gen.number_of_edges()} 连接" + (f" · 分支位置正确率 {ap:.0f}%" if ap is not None else ""))]
+    if G_real is not None:
+        panels.append((G_real, p_real, f"真实建成（同一楼层，作对照）\n{real_full.num_nodes} 单元 / {G_real.number_of_edges()} 连接"))
+    for k, (G, pos, ttl) in enumerate(panels):
+        ax = f.add_subplot(gs[2, 4 * k : 4 * k + 4])
+        draw_topology(ax, G, sk_nodes, pos=pos, title=ttl, seed=0, size_ref_n=n_t, frame=frame2, node_scale=0.9)
+    # (e) outlines | fit | corridors
     ax = f.add_subplot(gs[4, 0:4])
-    sk = db.get_graph(proto.prototype_id)
-    draw_topology(ax, to_networkx(layout.topology), set(sk.nodes), title="黑 = 原型骨架，白 = 新增单元", seed=0)
-    ax = f.add_subplot(gs[4, 4:10])
-    ax.add_patch(MplPolygon(layout.boundary.exterior, closed=True, facecolor="#FAFAFA", edgecolor="#333", lw=1.4))
-    kinds = {"shop": "#CFE8FF", "anchor": "#DCD6F7", "corridor": "#F0C987", "atrium": "#B5E7A0", "junction": "#222", "entrance": "#D9480F"}
-    for u in layout.units:
-        if u.polygon:
-            ax.add_patch(MplPolygon(u.polygon, closed=True, facecolor=kinds.get(u.kind, "#ddd"), edgecolor="#666", lw=0.4, alpha=0.95))
-    pos = layout.skeleton_positions
-    for a, b in layout.topology.edges():
-        if a in pos and b in pos:
-            ax.plot([pos[a][0], pos[b][0]], [pos[a][1], pos[b][1]], color="#D9480F", lw=1.0, alpha=0.8)
-    ax.set_aspect("equal")
-    ax.autoscale()
     ax.axis("off")
-    n_shop = sum(1 for u in layout.units if u.kind == "shop")
-    ax.set_title(f"{n_shop} 个店铺单元 · 走廊沿拓扑连接展开", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
-    from matplotlib.patches import Patch
-    f.legend(handles=[Patch(facecolor=v, edgecolor="#666", label=k2) for k2, v in [("店铺", kinds["shop"]), ("主力店", kinds["anchor"]), ("走廊", kinds["corridor"]), ("中庭", kinds["atrium"])]] + [plt.Line2D([], [], color="#D9480F", lw=1.2, label="拓扑连接")], loc="lower center", ncol=5, bbox_to_anchor=(0.5, 0.005), fontsize=s["fonts"]["size_annot"])
+    ax.set_title("① 选择外轮廓（红 = 选定）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
+    n_o = len(outlines)
+    for j, (name, o) in enumerate(outlines):
+        sub = ax.inset_axes([j / n_o + 0.02, 0.05, 1 / n_o - 0.04, 0.85])
+        _draw_shapely(sub, o.polygon, fc="#f4f4f4", ec=s["palette"]["highlight"] if j == chosen_i else "#555", lw=1.6 if j == chosen_i else 0.8)
+        sub.set_aspect("equal"); sub.autoscale(); sub.axis("off")
+        sub.set_title(f"{name}\n{o.area / 1e4:.1f} 万 m²" + ("  ✓" if j == chosen_i else ""), fontsize=s["fonts"]["size_annot"] - 1, color=s["palette"]["highlight"] if j == chosen_i else "#333")
+    ax = f.add_subplot(gs[4, 4:8])
+    _draw_shapely(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
+    _draw_shapely(ax, res.inset, fc="none", ec="#bbb", lw=0.6)
+    P = res.positions
+    for u, v in G_gen.edges:
+        main = plan.edge_class.get((u, v), plan.edge_class.get((v, u))) == "main"
+        ax.plot([P[u][0], P[v][0]], [P[u][1], P[v][1]], color="#D9480F" if main else "#e8a37a", lw=1.3 if main else 0.8)
+    ax.scatter([P[v][0] for v in G_gen.nodes], [P[v][1] for v in G_gen.nodes], s=14, c=["#2B2B2B" if v in sk_nodes else "white" for v in G_gen.nodes], zorder=5, edgecolors=["#2B2B2B" if v in sk_nodes else s["palette"]["ours"] for v in G_gen.nodes], linewidths=0.8)
+    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
+    ev_txt = f"交叉 {res.diagnostics.get('crossings', 0)} · 正交偏差 {res.diagnostics.get('ortho_deviation_deg', 0):.0f}°"
+    ax.set_title(f"② 关键点网络嵌入轮廓\n{ev_txt}", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
+    ax = f.add_subplot(gs[4, 8:12])
+    _draw_shapely(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
+    _draw_shapely(ax, plan.corridors_secondary, fc="#F7DDB0", ec="#b07a2a", lw=0.4)
+    _draw_shapely(ax, plan.corridors_main, fc="#F0C987", ec="#b07a2a", lw=0.5)
+    for at in plan.atria:
+        _draw_shapely(ax, at, fc="#B5E7A0", ec="#5a9a4a", lw=0.5)
+    for e in plan.entrances:
+        _draw_shapely(ax, e["stub"], fc="#F0C987", ec="#b07a2a", lw=0.4)
+        ax.scatter([e["point"][0]], [e["point"][1]], marker="v", s=55, c="#D9480F", zorder=6)
+    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
+    wtxt = f"主廊 {d3['main_width_m']:.0f} m / 次廊 {d3['secondary_width_m']:.0f} m" if d3['main_width_m'] != d3['secondary_width_m'] else f"廊宽 {d3['main_width_m']:.0f} m"
+    ax.set_title(f"③ 一键成廊：{wtxt}\n走廊占比 {d3['corridor_ratio'] * 100:.0f}%（真实中位 19%）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
+    f.legend(handles=legend_handles() + [Patch(facecolor="#F0C987", edgecolor="#b07a2a", label="主走廊"), Patch(facecolor="#F7DDB0", edgecolor="#b07a2a", label="次走廊"), Patch(facecolor="#B5E7A0", edgecolor="#5a9a4a", label="中庭（环路围合的洞）"), plt.Line2D([], [], marker="v", color="#D9480F", ls="", ms=7, label="出入口")],
+             loc="lower center", ncol=6, bbox_to_anchor=(0.5, 0.0), fontsize=s["fonts"]["size_annot"])
     f.suptitle(title_for("F09") + ("" if is_real else "（合成数据演示；本机运行时自动使用真实案例库）"), x=0.02, ha="left", fontweight="bold")
     return savefig(f, out, "F09_worked_example")
 
