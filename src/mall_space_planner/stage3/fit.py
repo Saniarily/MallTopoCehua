@@ -366,6 +366,52 @@ class CorridorFitter:
                     pos[v] = old
         return pos
 
+    def repair_crossings(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, rng: np.random.RandomState, passes: int = 3, n_random: int = 12) -> dict[str, np.ndarray]:
+        """Remove residual crossings left by the initialisation (Tutte on a non-convex inset can cross). For each
+        endpoint of a crossing pair (interior nodes first) try: neighbour barycentre, points along the edges to its
+        neighbours, random points in the inset; keep the first move that lowers the crossing count."""
+        pos = {k: v.copy() for k, v in pos.items()}
+        E = list(g.edges)
+        for _ in range(passes):
+            total = count_crossings(g, pos)
+            if total == 0:
+                break
+            bad: list[str] = []
+            for i in range(len(E)):
+                a, b = E[i]
+                for j in range(i + 1, len(E)):
+                    c, d = E[j]
+                    if len({a, b, c, d}) == 4 and _seg_cross(pos[a], pos[b], pos[c], pos[d]):
+                        bad.extend([a, b, c, d])
+            order = sorted(set(bad), key=lambda v: (roles[v] == "outer", -bad.count(v)))
+            minx, miny, maxx, maxy = inset.bounds
+            for v in order:
+                cur = count_crossings(g, pos)
+                if cur == 0:
+                    break
+                nb = list(g.neighbors(v))
+                cands = []
+                if nb:
+                    bary = np.mean([pos[u] for u in nb], axis=0)
+                    cands.append(bary)
+                    for u in nb:
+                        for t in (0.3, 0.6):
+                            cands.append(pos[v] + (pos[u] - pos[v]) * t)
+                for _k in range(n_random):
+                    cands.append(np.array([rng.uniform(minx, maxx), rng.uniform(miny, maxy)]))
+                old = pos[v]
+                best = (cur, old)
+                for c in cands:
+                    c = _project_inside(c, inset)
+                    pos[v] = c
+                    k = count_crossings(g, pos)
+                    if k < best[0]:
+                        best = (k, c)
+                        if k == 0:
+                            break
+                pos[v] = best[1]
+        return pos
+
     def snap_corners(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon) -> dict[str, np.ndarray]:
         corners = np.array(inset.exterior.coords[:-1])
         pos = {k: v.copy() for k, v in pos.items()}
@@ -413,8 +459,11 @@ class CorridorFitter:
             pool = [pool[i] for i in sorted(idx)]
         best = None
         for s0, pos0 in pool:
+            pos0 = self.repair_crossings(g, pos0, roles, inset, rng)  # planar start (relax never introduces crossings)
             pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng)
             pos1 = self.snap_corners(g, pos1, roles, inset)
+            if count_crossings(g, pos1):
+                pos1 = self.repair_crossings(g, pos1, roles, inset, rng)
             s, diag = self.score(g, pos1, roles, inset, lines, frame)
             if best is None or s < best[0]:
                 best = (s, pos1, diag)

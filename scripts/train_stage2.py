@@ -16,7 +16,13 @@ def main() -> None:
     corpus = a.corpus or cfg.get("corpus", "data/samples/synthetic/sharegpt_sample.json")
     ck = paths.resolve(cfg.get("checkpoint_dir", "outputs/checkpoints/stage2")) / cfg.get("experiment_name", "ar_gnn")
     if (ck / "ar_gnn.pt").exists() and not a.force:
-        print(f"cached checkpoint: {ck} (use --force to retrain)"); return
+        # a cached checkpoint is only reused when its feature version matches the current code (v2 → v3 changed the heads)
+        from mall_space_planner.stage2.generators.ar_gnn import FEAT_VERSION
+        try: fv = json.loads((ck / "meta.json").read_text(encoding="utf-8")).get("feat_version", 1)
+        except (OSError, ValueError): fv = None
+        if fv == FEAT_VERSION:
+            print(f"cached checkpoint: {ck} (use --force to retrain)"); return
+        print(f"stale checkpoint {ck} (feat_version {fv} != {FEAT_VERSION}) -> retraining")
     cp = paths.resolve(corpus)
     if cp.suffix.lower() == ".jsonl":  # corpus v2: mall-grouped split stored in the file
         train = load_any_corpus(cp, split="train", limit=a.limit or cfg.get("train_limit"))

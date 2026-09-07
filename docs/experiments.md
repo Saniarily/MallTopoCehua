@@ -163,3 +163,23 @@ anchors, planarity guard; `FEAT_VERSION=3`, old checkpoints must be retrained); 
 (`scripts/calibrate_stage2_thresholds.py`, q=0.95) because real targets are much denser than skeletons.
 
 **Run (Mac):** `bash scripts/run_real_data_round5.sh` (or `GRAPH_DIR=... bash ...`). Results → `outputs/experiments/stage2_eval_r5/table.md`.
+
+### Round 5 — first Mac run (2026-09-07, partial)
+Corpus v2 built: **5589 samples** from 6005 floors (373 missing skeleton, 43 no growth, 0 skeleton-not-subgraph, 0 bad).
+1312 targets (23%) are *disconnected* in the export (n_components 1.31 on the ground-truth row) — kept, but this is why
+ground truth itself only passes 93–96% (density/ASPL computed per component). Eval set = first 575 of the test split.
+
+| generator (seed 0) | overall_pass | density dev % | ASPL dev % | target-edge recall / precision % | attach recall / precision % | degree EMD |
+|---|---|---|---|---|---|---|
+| ground truth (calibrated thresholds) | 0.932 | 11.0 | 7.1 | 100 / 100 | 100 / 100 | 0 |
+| rule_expander | 0.868 (s1 0.842, s2 0.934) | 13.0 | 9.0 | 58.3 / 57.4 | 38.8 / 35.0 | 0.37 |
+| search_expander | 0.970 (s1 0.976, s2 0.976) | 9.5 | 2.6 | 58.3 / 58.7 | 44.5 / 39.9 | 0.36 |
+| ar_gnn v3 (+greedy, bestof16, bfs ablation) | **not run** — stale v2 checkpoint was reused → `feat_version 2 != 3` | | | | | |
+
+Note: target-edge recall is identical (58.3%) for every generator = the skeleton edges (kept verbatim) over target edges;
+the discriminative numbers are *attach* recall/precision and degree EMD. AR-GNN greedy_order retrained on v3:
+val anchor acc 0.444 / top-3 0.670 / has2 0.910 (10 epochs).
+
+**Bug fixed:** `run_real_data_round5.sh` checked `$?` after an `&& … || true` chain (always 0) so the v2 checkpoint was
+never retrained; `train_stage2.py` now compares the cached `meta.json` `feat_version` with the code and retrains when
+stale. Re-run `bash scripts/run_real_data_round5.sh` — finished cells are skipped; only the AR-GNN cells re-run.
