@@ -1,0 +1,19 @@
+# Reference first-floor plans chosen by the designer as good corridor systems (Stage-3 target morphology).
+# Format: {mall}_{floor}_{region}  -> corridor_mask/{id}.png
+B0I0ZA8R1J_1_0
+B0HUUZQJKM_1_0
+B0HUNABECE_1_0
+B0HU75YE4C_1_0
+B0HR7AO6U5_1_0
+B0HGOHV5NU_1_0
+B0HG3PD34W_1_1
+B0HG3AE08N_1_0
+B0HD3AMXL7_1_0
+B0HBKMNPIH_1_0
+B0HBKKP4DA_1_0
+B0HBFAY6G3_1_0
+B0HB379PU7_1_1
+B0HB4U8A4L_1_0
+B0H63U94Y7_1_0
+B0H6ZXTRNZ_1_0
+B0H6TD635N_1_0
