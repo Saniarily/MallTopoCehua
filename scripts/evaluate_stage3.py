@@ -39,6 +39,9 @@ def main() -> None:
     p.add_argument("--corpus", default=None); p.add_argument("--split", default="test"); p.add_argument("--limit", type=int, default=None)
     p.add_argument("--out", default="outputs/experiments/stage3_eval"); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-transfer", action="store_true"); p.add_argument("--restarts", type=int, default=4); p.add_argument("--iters", type=int, default=100)
+    p.add_argument("--max-nodes", type=int, default=120, help="skip floors with more M nodes (fit cost grows ~n^2); they are counted as 'skipped_large'")
+    p.add_argument("--timeout", type=float, default=300.0, help="per-floor wall-clock limit in seconds (self + transfer); over-limit floors are recorded as 'timeout'")
+    p.add_argument("--resume", action="store_true", help="skip floors already present in <out>/per_floor.csv")
     a = p.parse_args(); setup_logging(a.log_level); cfg = resolve_config(a.config, a.override); paths = ProjectPaths(root=ROOT)
     try:
         import PIL, skimage  # noqa: F401  (fail fast instead of 200 identical error rows)
@@ -53,21 +56,39 @@ def main() -> None:
     fitter = CorridorFitter(FitParams(shop_depth=shop_depth, n_restarts=a.restarts, iters=a.iters)); rp = RenderParams(corridor_ratio=cr)
     out = paths.resolve(a.out); out.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []; t0 = time.time()
+    per_floor_csv = out / "per_floor.csv"
+    done: set[str] = set()
+    if a.resume and per_floor_csv.exists():
+        prev = pd.read_csv(per_floor_csv); rows = prev.to_dict("records"); done = set(prev["floor_id"].astype(str))
+        print(f"resume: {len(done)} floors already evaluated", flush=True)
+
+    def _flush() -> None:
+        pd.DataFrame(rows).to_csv(per_floor_csv, index=False)
+
     for i, smp in enumerate(samples):
         fid = smp.sample_id; mall, _ = split_floor_id(fid)
+        if fid in done:
+            continue
         tp = s3.total_csv(fid)
         if tp is None:
             rows.append({"floor_id": fid, "protocol": "self", "status": "no_total_csv"}); continue
+        t_floor = time.time()
         try:
             outline = ds.outline(fid, 0, area_m2=None)
             topo = load_target_csv(tp.with_name(fid + "_M.csv")) if (tp.with_name(fid + "_M.csv")).exists() else smp.target
+            if topo.num_nodes > a.max_nodes:
+                rows.append({"floor_id": fid, "mall_id": mall, "protocol": "self", "status": "skipped_large", "n_nodes": topo.num_nodes}); continue
+            print(f"  [{i + 1}/{len(samples)}] {fid}: {topo.num_nodes} nodes, outline {outline.area:.0f} m2", flush=True)
             gt = m_positions_from_total_csv(tp, outline)
             res = fitter.fit(topo, outline, seed=a.seed); plan = render_corridors(topo, res.positions, outline, res.roles, rp)
             ev = evaluate_fit(topo, res, plan, outline, gt_positions={k: gt[k] for k in topo.nodes if k in gt})
             row = {"floor_id": fid, "mall_id": mall, "protocol": "self", "status": "ok", "n_nodes": topo.num_nodes, "outline_area_m2": outline.area,
                    "scale_source": outline.scale_source, "real_corridor_ratio": outline.extra.get("real_corridor_ratio"), **{k: ev.get(k) for k in KEEP}}
+            row["fit_seconds"] = round(time.time() - t_floor, 1)
             rows.append(row)
-            if not a.no_transfer:
+            if time.time() - t_floor > a.timeout:
+                rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "timeout", "n_nodes": topo.num_nodes})
+            elif not a.no_transfer:
                 cands = [c for c in ds.similar_outlines(outline.area, k=6, exclude_mall=mall) if s3.total_csv(c) or s3.outline_mask(c)]
                 if cands:
                     o2 = ds.outline(cands[0], 0); res2 = fitter.fit(topo, o2, seed=a.seed); plan2 = render_corridors(topo, res2.positions, o2, res2.roles, rp)
@@ -77,8 +98,8 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             rows.append({"floor_id": fid, "protocol": "self", "status": f"error: {type(exc).__name__}: {exc}"[:200]})
         if (i + 1) % 10 == 0:
-            print(f"  {i + 1}/{len(samples)} floors  ({time.time() - t0:.0f}s)", flush=True)
-    df = pd.DataFrame(rows); df.to_csv(out / "per_floor.csv", index=False)
+            print(f"  {i + 1}/{len(samples)} floors  ({time.time() - t0:.0f}s)", flush=True); _flush()
+    _flush(); df = pd.DataFrame(rows)
     summary: dict = {"n_samples": len(samples), "split": a.split, "corpus": str(corpus), "status_counts": df["status"].value_counts().to_dict(), "corridor_ratio_real_dataset": ds.corridor_ratio_stats()}
     for proto in ("self", "transfer"):
         sub = df[(df["protocol"] == proto) & (df["status"] == "ok")]

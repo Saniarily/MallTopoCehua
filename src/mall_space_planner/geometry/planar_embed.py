@@ -112,16 +112,37 @@ def _segments_cross(p1, p2, p3, p4) -> bool:  # noqa: ANN001
     return orient(p1, p2, p3) * orient(p1, p2, p4) < 0 and orient(p3, p4, p1) * orient(p3, p4, p2) < 0
 
 
+def crossing_matrix(E: list[tuple[str, str]], pos: dict[str, np.ndarray]) -> np.ndarray:
+    """Boolean [E, E] matrix of proper crossings between non-adjacent edges (vectorised orientation test)."""
+    m = len(E)
+    if m < 2:
+        return np.zeros((m, m), bool)
+    A = np.array([pos[a] for a, _ in E], float)
+    B = np.array([pos[b] for _, b in E], float)
+    # shared endpoint -> never counted
+    nid = {v: i for i, v in enumerate(pos)}
+    ida = np.array([nid[a] for a, _ in E])
+    idb = np.array([nid[b] for _, b in E])
+    share = (ida[:, None] == ida[None]) | (ida[:, None] == idb[None]) | (idb[:, None] == ida[None]) | (idb[:, None] == idb[None])
+    d = B - A  # [m, 2]
+
+    def orient(P, Q, R):  # noqa: ANN001, ANN202  orientation of R wrt segment P->Q, broadcast [m, m]
+        return (Q[:, None, 0] - P[:, None, 0]) * (R[None, :, 1] - P[:, None, 1]) - (Q[:, None, 1] - P[:, None, 1]) * (R[None, :, 0] - P[:, None, 0])
+
+    o1 = orient(A, B, A)  # edge i vs start of edge j
+    o2 = orient(A, B, B)
+    o3 = orient(A, B, A).T  # edge j vs start of edge i  (== orient_j(A_i))
+    o4 = orient(A, B, B).T
+    cross = (o1 * o2 < 0) & (o3 * o4 < 0) & ~share
+    np.fill_diagonal(cross, False)
+    return cross
+
+
 def count_crossings(g: nx.Graph, pos: dict[str, np.ndarray]) -> int:
     E = list(g.edges)
-    n = 0
-    for i in range(len(E)):
-        a, b = E[i]
-        for j in range(i + 1, len(E)):
-            c, d = E[j]
-            if len({a, b, c, d}) == 4 and _segments_cross(pos[a], pos[b], pos[c], pos[d]):
-                n += 1
-    return n
+    if len(E) < 2:
+        return 0
+    return int(np.triu(crossing_matrix(E, pos), 1).sum())
 
 
 def _ortho_snap(g: nx.Graph, pos: dict[str, np.ndarray], fixed: set[str], weight: float, iters: int, min_len: float) -> dict[str, np.ndarray]:
