@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -59,8 +60,14 @@ def main() -> None:
     per_floor_csv = out / "per_floor.csv"
     done: set[str] = set()
     if a.resume and per_floor_csv.exists():
-        prev = pd.read_csv(per_floor_csv); rows = prev.to_dict("records"); done = set(prev["floor_id"].astype(str))
-        print(f"resume: {len(done)} floors already evaluated", flush=True)
+        prev = pd.read_csv(per_floor_csv)
+        # keep only floors that finished (ok / deliberately skipped); error and timeout rows are dropped and retried
+        keep_status = {"ok", "skipped_large", "no_total_csv"}
+        finished = set(prev.loc[prev["status"].isin(keep_status), "floor_id"].astype(str))
+        prev = prev[prev["floor_id"].astype(str).isin(finished)]
+        rows = prev.to_dict("records"); done = finished
+        n_retry = int((~pd.read_csv(per_floor_csv)["floor_id"].astype(str).isin(finished)).sum())
+        print(f"resume: {len(done)} floors already evaluated, {n_retry} error/timeout rows will be retried", flush=True)
 
     def _flush() -> None:
         pd.DataFrame(rows).to_csv(per_floor_csv, index=False)
@@ -89,14 +96,20 @@ def main() -> None:
             if time.time() - t_floor > a.timeout:
                 rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "timeout", "n_nodes": topo.num_nodes})
             elif not a.no_transfer:
-                cands = [c for c in ds.similar_outlines(outline.area, k=6, exclude_mall=mall) if s3.total_csv(c) or s3.outline_mask(c)]
+                cands = ds.similar_outlines(outline.area, k=1, exclude_mall=mall)
+                if not cands:
+                    rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "no_candidate_outline", "n_nodes": topo.num_nodes})
                 if cands:
                     o2 = ds.outline(cands[0], 0); res2 = fitter.fit(topo, o2, seed=a.seed); plan2 = render_corridors(topo, res2.positions, o2, res2.roles, rp)
                     ev2 = evaluate_fit(topo, res2, plan2, o2)
                     rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "ok", "target_outline": cands[0], "n_nodes": topo.num_nodes,
                                  "outline_area_m2": o2.area, "real_corridor_ratio": o2.extra.get("real_corridor_ratio"), **{k: ev2.get(k) for k in KEEP if k in ev2}})
         except Exception as exc:  # noqa: BLE001
-            rows.append({"floor_id": fid, "protocol": "self", "status": f"error: {type(exc).__name__}: {exc}"[:200]})
+            import traceback
+
+            tb = traceback.extract_tb(exc.__traceback__)[-1]
+            rows.append({"floor_id": fid, "protocol": "self", "status": f"error: {type(exc).__name__}: {exc}"[:200], "error_at": f"{Path(tb.filename).name}:{tb.lineno}"})
+            print(f"  !! {fid}: {type(exc).__name__}: {exc} ({Path(tb.filename).name}:{tb.lineno})", flush=True)
         if (i + 1) % 10 == 0:
             print(f"  {i + 1}/{len(samples)} floors  ({time.time() - t0:.0f}s)", flush=True); _flush()
     _flush(); df = pd.DataFrame(rows)
