@@ -40,6 +40,7 @@ class RenderParams:
     max_entrances: int = 6
     entrance_spacing: float = 30.0
     entrance_width: float = 6.0
+    entrance_reach: float = 4.0  # a dead end within this × main width of the façade becomes an entrance, else a vertical core
     atrium_area_max: float = 900.0
     min_atrium_area: float = 80.0
     junction_pad: float = 1.25  # pad side = width × this
@@ -55,6 +56,7 @@ class CorridorPlan:
     entrances: list[dict]  # {node, point, stub: Polygon}
     atria: list[Polygon]
     edge_class: dict[tuple[str, str], str]
+    vertical_cores: list[dict] = field(default_factory=list)  # {node, point, polygon}: dead ends deep inside = stairs / escalators
     units: list[SpaceUnit] = field(default_factory=list)
     diagnostics: dict = field(default_factory=dict)
 
@@ -89,12 +91,22 @@ def _smooth(geom, r: float, fill_hole_area: float = 0.0):  # noqa: ANN001, ANN20
     return g
 
 
-def classify_edges(g: nx.Graph, quantile: float, roles: dict[str, str] | None = None) -> dict[tuple[str, str], str]:
-    """main = high edge-betweenness (top ``1-quantile``) or an edge of the outer loop; else secondary."""
+def classify_edges(g: nx.Graph, quantile: float, roles: dict[str, str] | None = None, skeleton_nodes: set[str] | None = None) -> dict[tuple[str, str], str]:
+    """Corridor hierarchy.
+
+    * With ``skeleton_nodes`` (the Stage-1 prototype = the *main* corridor system by construction): an edge between two
+      skeleton nodes is **main**, every edge touching a new node is **secondary**. This is the designer's reading of the
+      two-stage pipeline (skeleton = wide primary loop/spine, expansion = secondary corridors).
+    * Without a skeleton (e.g. a real complete network): main = outer loop or top ``1-quantile`` edge betweenness."""
+    out = {}
+    if skeleton_nodes:
+        for u, v in g.edges:
+            out[(u, v)] = "main" if (u in skeleton_nodes and v in skeleton_nodes) else "secondary"
+        if any(c == "main" for c in out.values()):
+            return out
     bc = nx.edge_betweenness_centrality(g) if g.number_of_edges() else {}
     vals = np.array(list(bc.values())) if bc else np.array([0.0])
     thr = float(np.quantile(vals, quantile)) if len(vals) else 0.0
-    out = {}
     for u, v in g.edges:
         b = bc.get((u, v), bc.get((v, u), 0.0))
         on_outer = bool(roles) and roles.get(u) == "outer" and roles.get(v) == "outer"
@@ -134,12 +146,16 @@ def _stub_to_facade(p: np.ndarray, outline: Polygon, direction_hint: np.ndarray 
     return stub, fp
 
 
-def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, float]], outline: Outline, roles: dict[str, str] | None = None, params: RenderParams | None = None) -> CorridorPlan:
+def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, float]], outline: Outline, roles: dict[str, str] | None = None, params: RenderParams | None = None, skeleton_nodes: set[str] | None = None) -> CorridorPlan:
+    """``skeleton_nodes``: Stage-1 prototype nodes → skeleton–skeleton edges are the main corridors (see
+    :func:`classify_edges`). Dead ends (degree-1 nodes) become entrances when the façade is within
+    ``prm.entrance_reach`` × main width, otherwise they are marked as vertical circulation (stairs/escalator cores) –
+    a real mall corridor never simply stops."""
     prm = params or RenderParams()
     g = to_networkx(topology)
     pos = {k: np.asarray(v, float) for k, v in positions.items()}
     site = outline.polygon
-    cls = classify_edges(g, prm.main_quantile, roles)
+    cls = classify_edges(g, prm.main_quantile, roles, skeleton_nodes)
     main_segs, sec_segs = [], []
     for (u, v), c in cls.items():
         if u in pos and v in pos and np.linalg.norm(pos[u] - pos[v]) > 1e-6:
@@ -151,17 +167,27 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
     # overlapping as separate rectangles (which leaves notches at every bend)
     main = unary_union(main_segs).buffer(w_main / 2, cap_style=cap, join_style=join) if main_segs else Polygon()
     sec = unary_union(sec_segs).buffer(w_sec / 2, cap_style=cap, join_style=join) if sec_segs else Polygon()
-    # junction pads (round plazas at nodes with degree >= 3)
-    pads = []
+    # junction pads: a slightly wider node where >= 3 corridors meet, added to the layer of the widest incident edge
+    # (never as a free-standing disc: a pad on secondary-only junctions goes into the secondary layer)
+    pads_main, pads_sec = [], []
     for v in g.nodes:
         if g.degree(v) >= 3 and v in pos:
-            w = w_main if any(cls.get((v, u), cls.get((u, v))) == "main" for u in g.neighbors(v)) else w_sec
-            pads.append(Point(pos[v]).buffer(w * prm.junction_pad / 2))
-    if pads:
-        main = unary_union([main, *pads])
+            if any(cls.get((v, u), cls.get((u, v))) == "main" for u in g.neighbors(v)):
+                pads_main.append(Point(pos[v]).buffer(w_main * prm.junction_pad / 2))
+            else:
+                pads_sec.append(Point(pos[v]).buffer(w_sec * prm.junction_pad / 2))
+    if pads_main:
+        main = unary_union([main, *pads_main])
+    if pads_sec:
+        sec = unary_union([sec, *pads_sec])
     r_s = prm.smooth_radius if prm.smooth_radius > 0 else 0.5 * w_main
-    main = _smooth(main, r_s, prm.fill_hole_area).intersection(site).buffer(0)
-    sec = _smooth(sec.difference(main), r_s * w_sec / w_main, prm.fill_hole_area).intersection(site).buffer(0)
+    # smooth the whole corridor body at once so main/secondary join seamlessly, then split by hierarchy
+    body = _smooth(unary_union([main, sec]), r_s, prm.fill_hole_area).intersection(site).buffer(0)
+    main = _smooth(main, r_s, prm.fill_hole_area).intersection(body).buffer(0)
+    sec = body.difference(main).buffer(0)
+    # drop crumbs (slivers left by the difference) smaller than one junction pad
+    sec = unary_union([q for q in _polys(sec) if q.area >= (w_sec * prm.junction_pad) ** 2 * 0.5]) if _polys(sec) else Polygon()
+    main = unary_union([q for q in _polys(main) if q.area >= (w_main * prm.junction_pad) ** 2 * 0.5]) if _polys(main) else Polygon()
     # entrances
     entrances: list[dict] = []
     cands = []
@@ -175,13 +201,25 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
         elif roles and roles.get(v) == "outer":
             cands.append((1, dist, v, None))
     cands.sort(key=lambda t: (t[0], t[1]))
+    vertical_cores: list[dict] = []
     for pri, dist, v, hint in cands:
+        if pri == 0 and dist > prm.entrance_reach * w_main:
+            # a dead end deep inside the floor: not an entrance – it is where a stair / escalator core sits
+            side = w_main * prm.junction_pad
+            vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
+            continue
         if len(entrances) >= prm.max_entrances:
-            break
+            if pri == 0:  # every remaining dead end must still terminate somewhere
+                side = w_main * prm.junction_pad
+                vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
+            continue
         stub, fp = _stub_to_facade(pos[v], site, hint, min(prm.entrance_width, w_main))
         if fp is None:
             continue
         if any(np.linalg.norm(fp - e["point"]) < prm.entrance_spacing for e in entrances):
+            if pri == 0:
+                side = w_main * prm.junction_pad
+                vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
             continue
         if pri == 1 and len(entrances) >= prm.min_entrances and dist > 2.5 * w_main:
             continue  # outer-loop candidates only to reach the minimum, unless they touch the façade anyway
@@ -226,14 +264,16 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
         units.append(SpaceUnit(unit_id=f"AT{i}", kind="atrium", polygon=[tuple(map(float, c)) for c in a.exterior.coords[:-1]], centroid=(a.centroid.x, a.centroid.y), area=float(a.area)))
     for i, e in enumerate(entrances):
         units.append(SpaceUnit(unit_id=f"E{i}", kind="entrance", centroid=(float(e["point"][0]), float(e["point"][1])), attached_to=[e["node"]], polygon=[tuple(map(float, c)) for c in e["stub"].exterior.coords[:-1]] if not e["stub"].is_empty else None, attrs={"kind": e["kind"]}))
+    for i, vc in enumerate(vertical_cores):
+        units.append(SpaceUnit(unit_id=f"VC{i}", kind="vertical_core", centroid=(float(vc["point"][0]), float(vc["point"][1])), attached_to=[vc["node"]], polygon=[tuple(map(float, c)) for c in vc["polygon"].exterior.coords[:-1]], area=float(vc["polygon"].area)))
     corr = unary_union([main, sec, *[e["stub"] for e in entrances if not e["stub"].is_empty]])
     diag = {
         "main_width_m": w_main, "secondary_width_m": w_sec,
         "n_main_edges": sum(1 for c in cls.values() if c == "main"), "n_secondary_edges": sum(1 for c in cls.values() if c == "secondary"),
-        "corridor_area_m2": float(corr.area), "corridor_ratio": float(corr.area / max(site.area, 1e-9)), "n_entrances": len(entrances), "n_atria": len(atria),
+        "corridor_area_m2": float(corr.area), "corridor_ratio": float(corr.area / max(site.area, 1e-9)), "n_entrances": len(entrances), "n_atria": len(atria), "n_vertical_cores": len(vertical_cores), "n_dead_ends": sum(1 for v in g.nodes if g.degree(v) == 1),
         "atrium_area_m2": float(sum(a.area for a in atria)), "main_length_m": float(sum(s.length for s in main_segs)), "secondary_length_m": float(sum(s.length for s in sec_segs)),
     }
-    return CorridorPlan(corridors_main=main, corridors_secondary=sec, entrances=entrances, atria=atria, edge_class=cls, units=units, diagnostics=diag)
+    return CorridorPlan(corridors_main=main, corridors_secondary=sec, entrances=entrances, atria=atria, edge_class=cls, vertical_cores=vertical_cores, units=units, diagnostics=diag)
 
 
 __all__ = ["CorridorPlan", "RenderParams", "classify_edges", "render_corridors"]

@@ -45,6 +45,13 @@ class PlanarEmbedParams:
 
 
 # --------------------------------------------------------------------------- helpers
+def _is_simple_cycle(g: nx.Graph, cyc: list[str]) -> bool:
+    """``cyc`` is a closed walk of distinct nodes whose consecutive pairs are edges of ``g``."""
+    if len(cyc) != len(set(cyc)) or len(cyc) < 3:
+        return False
+    return all(g.has_edge(cyc[i], cyc[(i + 1) % len(cyc)]) for i in range(len(cyc)))
+
+
 def _outer_cycle(core: nx.Graph) -> list[str]:
     """Longest simple cycle found by a planar embedding's face traversal (approx. outer face)."""
     is_planar, emb = nx.check_planarity(core)
@@ -182,9 +189,13 @@ def _ortho_snap(g: nx.Graph, pos: dict[str, np.ndarray], fixed: set[str], weight
 
 
 # --------------------------------------------------------------------------- main
-def planar_corridor_embedding(topology: TopologyGraph, params: PlanarEmbedParams | None = None) -> tuple[dict[str, tuple[float, float]], dict]:
+def planar_corridor_embedding(topology: TopologyGraph, params: PlanarEmbedParams | None = None, skeleton_nodes: set[str] | None = None) -> tuple[dict[str, tuple[float, float]], dict]:
     """Return ``(positions in an abstract unit frame, info)``. ``info`` has ``core_nodes``, ``outer_cycle``,
-    ``faces`` (atrium candidates as polygons in the same frame, largest first), ``crossings``."""
+    ``faces`` (atrium candidates as polygons in the same frame, largest first), ``crossings``.
+
+    ``skeleton_nodes``: when the Stage-1 prototype is known, the outer cycle is taken from the *skeleton's* own
+    cycles (the primary corridor loop the designer chose) instead of the longest face of the whole network, so the
+    skeleton reads as the main loop and the new nodes hang inside/around it."""
     prm = params or PlanarEmbedParams()
     g = to_networkx(topology)
     if g.number_of_nodes() == 0:
@@ -197,9 +208,22 @@ def planar_corridor_embedding(topology: TopologyGraph, params: PlanarEmbedParams
     outer: list[str] = []
     if core.number_of_nodes() >= 3:
         outer = _outer_cycle(core)
+        pos = None
+        if skeleton_nodes:
+            sk_core = core.subgraph([v for v in core.nodes if v in skeleton_nodes])
+            if sk_core.number_of_nodes() >= 4 and nx.cycle_basis(sk_core):
+                cand = _outer_cycle(nx.k_core(sk_core, 2)) if nx.k_core(sk_core, 2).number_of_nodes() >= 3 else []
+                if len(cand) >= 4 and _is_simple_cycle(core, cand):
+                    # Pinning the skeleton loop as the outer face is only crossing-free when every other core node
+                    # can sit *inside* it (i.e. the loop is a face of the core). Try it; keep it only if it embeds cleanly,
+                    # otherwise the new nodes that hang outside the skeleton loop would be forced through it.
+                    trial = _tutte(core, cand)
+                    if count_crossings(core, trial) == 0 and len(set(map(tuple, np.round([trial[v] for v in core], 4)))) == core.number_of_nodes():
+                        outer, pos = cand, trial
         # Tutte per biconnected block would be more exact; the whole core works well when the outer
         # face is a real cycle. Blocks connected by bridges are handled by the relaxation below.
-        pos = _tutte(core, outer)
+        if pos is None:
+            pos = _tutte(core, outer)
         # relax bridges / degenerate placements (nodes collapsed on a line) with a light spring step
         if count_crossings(core, pos) > 0 or len(set(map(tuple, np.round([pos[v] for v in core], 4)))) < core.number_of_nodes():
             sp = nx.spring_layout(core, pos={k: tuple(v) for k, v in pos.items()}, fixed=outer, k=0.6 / np.sqrt(core.number_of_nodes()), iterations=80, seed=0)

@@ -92,7 +92,7 @@ def test_corridor_only_decoder_and_service_api(real) -> None:  # noqa: ANN001
     layout = CorridorOnlyDecoder(n_restarts=2, iters=40).decode(topo, req, 0)
     assert len(layout.skeleton_positions) == topo.num_nodes
     assert layout.diagnostics["crossings"] == 0 and layout.diagnostics["n_entrances"] >= 1
-    assert all(u.kind in {"corridor", "atrium", "entrance"} for u in layout.units)
+    assert all(u.kind in {"corridor", "atrium", "entrance", "vertical_core"} for u in layout.units)
 
 
 def test_stage3_dataset_csv_and_outline_loader(tmp_path) -> None:  # noqa: ANN001

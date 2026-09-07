@@ -616,8 +616,8 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     chosen_i = 0
     outline = outlines[chosen_i][1]
     fitter = CorridorFitter(FitParams(n_restarts=4, iters=100))
-    res = fitter.fit(g_gen, outline, seed=0)
-    plan = render_corridors(g_gen, res.positions, outline, res.roles, RenderParams())
+    res = fitter.fit(g_gen, outline, seed=0, skeleton_nodes=sk_nodes)
+    plan = render_corridors(g_gen, res.positions, outline, res.roles, RenderParams(), skeleton_nodes=sk_nodes)
     d3 = plan.diagnostics
 
     # ---- figure --------------------------------------------------------------------------------------------------

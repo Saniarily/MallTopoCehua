@@ -570,7 +570,8 @@ class CorridorFitter:
         return pos
 
     # ---- main -----------------------------------------------------------------------------------
-    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0) -> FitResult:
+    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None) -> FitResult:
+        """``skeleton_nodes`` (Stage-1 prototype): its cycle becomes the outer loop pinned to the inset boundary."""
         p = self.p
         g = to_networkx(topology)
         rng = np.random.RandomState(seed)
@@ -581,7 +582,7 @@ class CorridorFitter:
         p.min_spacing = float(min(p.min_spacing, 0.85 * np.sqrt(inset.area / max(g.number_of_nodes(), 1))))
         _, lines = medial_axis_graph(outline, depth, px=p.raster_px)
         frame = dominant_directions(outline.polygon)
-        _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0))
+        _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0), skeleton_nodes=skeleton_nodes)
         roles = _roles(g, info)
         cands = _init_on_inset(g, roles, list(info.get("outer_cycle", [])), inset, lines, depth, p.snap_dist, p.n_offsets)
         scored = []

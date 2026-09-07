@@ -69,9 +69,10 @@ class PlanningService:
         return self.stage2.run(req)
 
     # ------------------------------------------------------------------ stage 3: corridor adaptation
-    def adapt_corridor(self, topology, outline_points: list[tuple[float, float]] | None = None, outline=None, seed: int = 0, shop_depth: float = 14.0, corridor_ratio: float = 0.18):  # noqa: ANN001, ANN201
+    def adapt_corridor(self, topology, outline_points: list[tuple[float, float]] | None = None, outline=None, seed: int = 0, shop_depth: float = 14.0, corridor_ratio: float = 0.18, skeleton_nodes: set[str] | None = None):  # noqa: ANN001, ANN201
         """Fit an M key-point network (a Stage-2 result or any TopologyGraph) into an outline and render the
-        complete corridor system. ``outline_points`` = hand-drawn polygon in metres, or pass an ``Outline``.
+        complete corridor system. ``outline_points`` = hand-drawn polygon in metres, or pass an ``Outline``; ``skeleton_nodes``
+        = the Stage-1 prototype nodes (skeleton edges become the main corridors).
         Returns (FitResult, CorridorPlan, metrics)."""
         from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, outline_from_points, render_corridors
         from mall_space_planner.stage3.evaluate import evaluate_fit
@@ -80,8 +81,8 @@ class PlanningService:
             if not outline_points:
                 raise ValueError("adapt_corridor needs outline_points or outline")
             outline = outline_from_points(outline_points)
-        res = CorridorFitter(FitParams(shop_depth=shop_depth)).fit(topology, outline, seed=seed)
-        plan = render_corridors(topology, res.positions, outline, res.roles, RenderParams(corridor_ratio=corridor_ratio))
+        res = CorridorFitter(FitParams(shop_depth=shop_depth)).fit(topology, outline, seed=seed, skeleton_nodes=skeleton_nodes)
+        plan = render_corridors(topology, res.positions, outline, res.roles, RenderParams(corridor_ratio=corridor_ratio), skeleton_nodes=skeleton_nodes)
         return res, plan, evaluate_fit(topology, res, plan, outline)
 
     @staticmethod
