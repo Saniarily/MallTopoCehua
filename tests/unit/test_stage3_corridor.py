@@ -109,8 +109,12 @@ def test_stage3_dataset_csv_and_outline_loader(tmp_path) -> None:  # noqa: ANN00
     # pixel scale from a mall-level m² area spread over its floors
     mpp, src = ds.m_per_px_for("B000A0E928_1", mall_area_m2=3 * 67568 * 0.25, n_floors=3)
     assert src == "main_table_area" and abs(mpp - 0.5) < 1e-9
-    sims = ds.similar_outlines(67568 * 0.25, k=3, exclude_mall="B000A0E928")
+    sims = ds.similar_outlines(67568 * 0.25, k=3, exclude_mall="B000A0E928", require_source=False)
     assert sims and all(not s.startswith("B000A0E928") for s in sims)
+    # with the default require_source=True only floors whose mask/total.csv exists are returned: none for other malls here,
+    # the fixture floor itself when not excluded
+    assert ds.similar_outlines(67568 * 0.25, k=3, exclude_mall="B000A0E928") == []
+    assert ds.similar_outlines(67568 * 0.25, k=1) == ["B000A0E928_1"]
 
 
 def test_outline_from_mask_png(tmp_path) -> None:  # noqa: ANN001

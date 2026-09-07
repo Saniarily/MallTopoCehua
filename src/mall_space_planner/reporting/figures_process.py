@@ -534,7 +534,7 @@ def _stage3_context(results: Path, floor_id: str, mall_id: str, area_hint: float
     # candidate outlines: similar pixel area, other malls; else the floor's own outline; else none
     cands: list[str] = []
     if area_hint:
-        cands = [c for c in ds.similar_outlines(area_hint, k=8, exclude_mall=mall_id) if paths.outline_mask(c) or paths.total_csv(c)][:3]
+        cands = ds.similar_outlines(area_hint, k=3, exclude_mall=mall_id)
     own = used_fid if (paths.outline_mask(used_fid) or paths.total_csv(used_fid)) else None
     return ds, paths, real_full, used_fid, cands, own
 

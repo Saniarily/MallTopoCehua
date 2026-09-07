@@ -361,7 +361,7 @@ class CorridorFitter:
             for i, v in enumerate(nodes):
                 disp[v] += p.w_repel * push[i] * 0.5
             # edge–node clearance (node too close to a non-incident corridor), vectorised point–segment distances
-            if it % 3 == 0:
+            if it % 3 == 0 and g.number_of_edges() > 0:
                 E_ = list(g.edges)
                 A = np.array([pos[a] for a, _ in E_])
                 B = np.array([pos[b] for _, b in E_])

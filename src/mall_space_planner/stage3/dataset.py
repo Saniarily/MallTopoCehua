@@ -150,9 +150,13 @@ class Stage3Dataset:
             o.extra.update({"real_corridor_ratio": rec.corridor_ratio, "area_total_px": rec.area_total_px, "shape_coef": rec.shape_coef})
         return o
 
-    def similar_outlines(self, area_m2: float, k: int = 5, exclude_mall: str | None = None) -> list[str]:
+    def has_outline_source(self, floor_id: str, region: int = 0) -> bool:
+        return self.paths.outline_mask(floor_id, region) is not None or self.paths.total_csv(floor_id) is not None
+
+    def similar_outlines(self, area_m2: float, k: int = 5, exclude_mall: str | None = None, require_source: bool = True) -> list[str]:
         """Floor ids (region 0) whose pixel area is closest to ``area_m2`` at the default scale – the "pick a real
-        outline of similar size" step of the web UI."""
+        outline of similar size" step of the web UI. With ``require_source`` only floors whose mask PNG or
+        ``*_total.csv`` actually exists are returned (checked in area order until ``k`` are found)."""
         if self.df.empty:
             return []
         sub = self.df[(self.df["num_id"] == 0) & (self.df["area_total"] > 0)]
@@ -160,7 +164,16 @@ class Stage3Dataset:
             sub = sub[sub["mall_id"] != exclude_mall]
         target_px = area_m2 / (self.paths.m_per_px**2)
         d = (np.log(sub["area_total"]) - np.log(target_px)).abs()
-        return list(sub.assign(d=d).sort_values("d")["floor_id"].head(k))
+        ranked = list(sub.assign(d=d).sort_values("d")["floor_id"])
+        if not require_source:
+            return ranked[:k]
+        out: list[str] = []
+        for fid in ranked:
+            if self.has_outline_source(fid):
+                out.append(fid)
+                if len(out) >= k:
+                    break
+        return out
 
 
 # ------------------------------------------------------------------------------------------ helpers

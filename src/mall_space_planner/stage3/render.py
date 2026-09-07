@@ -161,13 +161,16 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
             continue
         if pri == 1 and len(entrances) >= prm.min_entrances and dist > 2.5 * w_main:
             continue  # outer-loop candidates only to reach the minimum, unless they touch the façade anyway
-        entrances.append({"node": v, "point": fp, "stub": (stub.intersection(site).buffer(0) if stub is not None else Polygon()), "kind": "dead_end" if pri == 0 else "loop"})
+        stub_geom = stub.intersection(site).buffer(0) if stub is not None else Polygon()
+        stub_geom = max(_polys(stub_geom), key=lambda q: q.area) if _polys(stub_geom) else Polygon()  # clipping can split the stub
+        entrances.append({"node": v, "point": fp, "stub": stub_geom, "kind": "dead_end" if pri == 0 else "loop"})
     # atria = holes enclosed by main corridors (centre-line faces), shrunk to leave an inward shop ring
     atria: list[Polygon] = []
     if main_segs:
         faces = list(polygonize(unary_union(main_segs)))
         for f in sorted(faces, key=lambda q: -q.area):
             hole = f.buffer(-w_main / 2).buffer(0)
+            hole = max(_polys(hole), key=lambda q: q.area) if _polys(hole) else Polygon()  # shrinking can split a face
             if hole.is_empty or hole.area < prm.min_atrium_area:
                 continue
             if hole.area > prm.atrium_area_max:
