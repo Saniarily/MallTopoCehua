@@ -28,7 +28,7 @@ import networkx as nx
 import numpy as np
 from shapely.geometry import LineString, Point, Polygon
 
-from mall_space_planner.geometry.planar_embed import PlanarEmbedParams, count_crossings, planar_corridor_embedding
+from mall_space_planner.geometry.planar_embed import PlanarEmbedParams, count_crossings, crossing_matrix, planar_corridor_embedding
 from mall_space_planner.schemas import TopologyGraph
 from mall_space_planner.stage3.outline import Outline
 from mall_space_planner.stage3.skeleton import dominant_directions, inset_region, medial_axis_graph, nearest_on_lines
@@ -213,9 +213,11 @@ def _project_inside(p: np.ndarray, poly: Polygon) -> np.ndarray:
     if not np.all(np.isfinite(p)):
         c = poly.representative_point()
         return np.array([c.x, c.y])
-    pt = Point(p)
-    if poly.contains(pt):
+    from shapely import contains_xy
+
+    if contains_xy(poly, float(p[0]), float(p[1])):
         return p
+    pt = Point(p)
     q = poly.exterior.interpolate(poly.exterior.project(pt))
     # nudge slightly inside
     c = poly.representative_point()
@@ -276,23 +278,46 @@ class CorridorFitter:
         D = np.linalg.norm(P[:, None] - P[None], axis=-1) + np.eye(len(P)) * 1e9
         adj = nx.to_numpy_array(g, nodelist=keys) > 0
         viol = float(np.mean((D < self.p.min_spacing) & ~adj)) if len(P) > 1 else 0.0
-        # coverage: how much of the inset is within one shop depth of a corridor (corridors should serve the floor)
-        corr = LineString([(0, 0), (0, 0)])
-        segs = [LineString([pos[u], pos[v]]) for u, v in g.edges if np.linalg.norm(pos[u] - pos[v]) > 1e-6]
-        cover = 0.0
-        if segs:
-            from shapely.ops import unary_union
-
-            served = unary_union(segs).buffer(self.p.shop_depth * 1.1)
-            cover = float(inset.intersection(served).area / max(inset.area, 1e-9))
+        # coverage: share of the inset within one shop depth of a corridor, estimated on a coarse grid of sample
+        # points (a shapely buffer of the whole network costs ~0.3 s per call, this is ~1 ms)
+        cover = self._coverage(g, pos, inset)
         s = 3.0 * (1 - inside) + 2.0 * cross + 0.8 * near_b + 0.5 * near_a + 0.8 * ortho + 2.0 * viol + 1.0 * (1 - cover)
         return s, {"inside_ratio": inside, "crossings": cross, "outer_to_boundary_m": near_b * self.p.shop_depth, "branch_to_axis_m": near_a * self.p.shop_depth, "ortho_deviation_deg": ortho * 45.0, "spacing_violation_rate": viol, "served_area_ratio": cover}
+
+    def _coverage(self, g: nx.Graph, pos: dict[str, np.ndarray], inset: Polygon, n_grid: int = 24) -> float:
+        key = id(inset)
+        if getattr(self, "_grid_key", None) != key:
+            minx, miny, maxx, maxy = inset.bounds
+            xs = np.linspace(minx, maxx, n_grid)
+            ys = np.linspace(miny, maxy, n_grid)
+            G = np.array([(x, y) for x in xs for y in ys])
+            from shapely import contains_xy
+
+            inside = contains_xy(inset, G[:, 0], G[:, 1])
+            self._grid_key, self._grid_pts = key, G[inside]
+        pts = self._grid_pts
+        if len(pts) == 0:
+            return 1.0
+        segs = [(pos[u], pos[v]) for u, v in g.edges if np.linalg.norm(pos[u] - pos[v]) > 1e-6]
+        if not segs:
+            return 0.0
+        A = np.array([a for a, _ in segs])
+        B = np.array([b for _, b in segs])
+        d = B - A  # [S, 2]
+        L2 = (d**2).sum(1) + 1e-12
+        # point-to-segment distance for all (pt, seg) pairs
+        w = pts[:, None, :] - A[None]  # [P, S, 2]
+        t = np.clip((w * d[None]).sum(-1) / L2[None], 0, 1)
+        proj = A[None] + t[..., None] * d[None]
+        dist = np.linalg.norm(pts[:, None, :] - proj, axis=-1).min(1)
+        return float(np.mean(dist <= self.p.shop_depth * 1.1))
 
     # ---- relaxation ---------------------------------------------------------------------------
     def relax(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], rng: np.random.RandomState) -> dict[str, np.ndarray]:
         p = self.p
         nodes = list(g.nodes)
         pos = {k: v.copy() for k, v in pos.items()}
+        checker = _NodeCrossChecker(g)
         for it in range(p.iters):
             T = 1.0 - it / p.iters  # annealed step
             disp = {v: np.zeros(2) for v in nodes}
@@ -335,35 +360,44 @@ class CorridorFitter:
             push = (unit * (p.min_spacing - dist)[..., None] * close[..., None]).sum(1)
             for i, v in enumerate(nodes):
                 disp[v] += p.w_repel * push[i] * 0.5
-            # edge–node clearance (node too close to a non-incident corridor) – only every 5th iteration (costly)
-            if it % 5 == 0:
-                for i, v in enumerate(nodes):
-                    pv = Point(pos[v])
-                    for a, b in g.edges:
-                        if v in (a, b):
-                            continue
-                        seg = LineString([pos[a], pos[b]])
-                        dd = seg.distance(pv)
-                        if dd < p.min_spacing * 0.6:
-                            q = seg.interpolate(seg.project(pv))
-                            away = pos[v] - np.array([q.x, q.y])
-                            n = np.linalg.norm(away)
-                            if n > 1e-9:
-                                disp[v] += away / n * (p.min_spacing * 0.6 - dd) * 2.5
+            # edge–node clearance (node too close to a non-incident corridor), vectorised point–segment distances
+            if it % 3 == 0:
+                E_ = list(g.edges)
+                A = np.array([pos[a] for a, _ in E_])
+                B = np.array([pos[b] for _, b in E_])
+                dseg = B - A
+                L2 = (dseg**2).sum(1) + 1e-12
+                w = P[:, None, :] - A[None]  # [N, S, 2]
+                t = np.clip((w * dseg[None]).sum(-1) / L2[None], 0, 1)
+                proj = A[None] + t[..., None] * dseg[None]
+                away = P[:, None, :] - proj  # [N, S, 2]
+                dd = np.linalg.norm(away, axis=-1)
+                nid = {v: i for i, v in enumerate(nodes)}
+                inc = np.zeros((len(nodes), len(E_)), bool)
+                for j, (a, b) in enumerate(E_):
+                    inc[nid[a], j] = inc[nid[b], j] = True
+                lim = p.min_spacing * 0.6
+                hit = (dd < lim) & ~inc & (dd > 1e-9)
+                if hit.any():
+                    push_e = (away / (dd[..., None] + 1e-12) * ((lim - dd) * hit)[..., None] * 2.5).sum(1)
+                    for i, v in enumerate(nodes):
+                        disp[v] += push_e[i]
             # apply with planarity check; a move that would create a crossing is retried with a halved step
             # (line search) so crowded Tutte interiors can still expand instead of getting stuck
-            E = list(g.edges)
-            for v in nodes:
+            Pcur = np.array([pos[v] for v in nodes])
+            for i, v in enumerate(nodes):
                 old = pos[v]
                 full = disp[v] * p.step * (0.4 + 0.6 * T)
                 if np.linalg.norm(full) < 1e-9:
                     continue
                 for frac in (1.0, 0.5, 0.25, 0.125):
                     pos[v] = _project_inside(old + full * frac, inset)
-                    if not _node_crosses(g, pos, v, E):
+                    Pcur[i] = pos[v]
+                    if not checker.crosses(pos, v, Pcur):
                         break
                 else:
                     pos[v] = old
+                    Pcur[i] = old
         return pos
 
     def repair_crossings(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, rng: np.random.RandomState, passes: int = 3, n_random: int = 12) -> dict[str, np.ndarray]:
@@ -377,12 +411,9 @@ class CorridorFitter:
             if total == 0:
                 break
             bad: list[str] = []
-            for i in range(len(E)):
-                a, b = E[i]
-                for j in range(i + 1, len(E)):
-                    c, d = E[j]
-                    if len({a, b, c, d}) == 4 and _seg_cross(pos[a], pos[b], pos[c], pos[d]):
-                        bad.extend([a, b, c, d])
+            cm = np.triu(crossing_matrix(E, pos), 1)
+            for i, j in zip(*np.nonzero(cm)):
+                bad.extend([*E[i], *E[j]])
             order = sorted(set(bad), key=lambda v: (roles[v] == "outer", -bad.count(v)))
             minx, miny, maxx, maxy = inset.bounds
             for v in order:
@@ -474,29 +505,53 @@ class CorridorFitter:
         return FitResult(positions={k: (float(v[0]), float(v[1])) for k, v in pos.items()}, roles=roles, inset=inset, axis_lines=lines, frame_angles=frame, score=float(s), diagnostics=diag)
 
 
-def _node_crosses(g: nx.Graph, pos: dict[str, np.ndarray], v: str, E: list[tuple[str, str]]) -> bool:
-    """Does any edge incident to ``v`` cross a non-adjacent edge? Vectorised orientation test."""
-    inc = [(v, u) for u in g.neighbors(v)]
-    if not inc:
-        return False
-    others = [(a, b) for a, b in E if v not in (a, b)]
-    if not others:
-        return False
-    A = np.array([pos[a] for a, _ in others])
-    B = np.array([pos[b] for _, b in others])
-    for a, b in inc:
-        p1, p2 = pos[a], pos[b]
-        mask = np.array([b not in (x, y) for x, y in others])
-        if not mask.any():
-            continue
-        Am, Bm = A[mask], B[mask]
-        o1 = (p2[0] - p1[0]) * (Am[:, 1] - p1[1]) - (p2[1] - p1[1]) * (Am[:, 0] - p1[0])
-        o2 = (p2[0] - p1[0]) * (Bm[:, 1] - p1[1]) - (p2[1] - p1[1]) * (Bm[:, 0] - p1[0])
-        o3 = (Bm[:, 0] - Am[:, 0]) * (p1[1] - Am[:, 1]) - (Bm[:, 1] - Am[:, 1]) * (p1[0] - Am[:, 0])
-        o4 = (Bm[:, 0] - Am[:, 0]) * (p2[1] - Am[:, 1]) - (Bm[:, 1] - Am[:, 1]) * (p2[0] - Am[:, 0])
-        if np.any((o1 * o2 < 0) & (o3 * o4 < 0)):
-            return True
-    return False
+class _NodeCrossChecker:
+    """Incremental planarity test: does moving ``v`` make any incident edge cross a non-adjacent edge?
+    Per-node index structures are built once; each query is one vectorised orientation test over the
+    edges not touching ``v`` or the incident edge's other endpoint."""
+
+    def __init__(self, g: nx.Graph) -> None:
+        self.E = list(g.edges)
+        self.nodes = list(g.nodes)
+        self.nid = {v: i for i, v in enumerate(self.nodes)}
+        ea = np.array([self.nid[a] for a, _ in self.E])
+        eb = np.array([self.nid[b] for _, b in self.E])
+        self.ea, self.eb = ea, eb
+        self.nbrs = {v: list(g.neighbors(v)) for v in self.nodes}
+        # for each node: mask of edges not incident to it
+        self.not_inc = {v: (ea != self.nid[v]) & (eb != self.nid[v]) for v in self.nodes}
+
+    def crosses(self, pos: dict[str, np.ndarray], v: str, P: np.ndarray | None = None) -> bool:
+        """``P`` (optional) = current positions as an [N, 2] array in ``self.nodes`` order with ``pos[v]`` already
+        written into row ``nid[v]``; avoids rebuilding the array from the dict on every query."""
+        nb = self.nbrs[v]
+        if not nb:
+            return False
+        if P is None:
+            P = np.array([pos[n] for n in self.nodes])
+        sel = self.not_inc[v]
+        A, B = P[self.ea[sel]], P[self.eb[sel]]  # other edges [S, 2]
+        if len(A) == 0:
+            return False
+        ea_s, eb_s = self.ea[sel], self.eb[sel]
+        p1 = P[self.nid[v]]
+        U = np.array([self.nid[u] for u in nb])
+        p2 = P[U]  # [K, 2] incident-edge far ends
+        # orientation tests broadcast over incident edges (K) x other edges (S)
+        d = p2 - p1  # [K, 2]
+        o1 = d[:, None, 0] * (A[None, :, 1] - p1[1]) - d[:, None, 1] * (A[None, :, 0] - p1[0])
+        o2 = d[:, None, 0] * (B[None, :, 1] - p1[1]) - d[:, None, 1] * (B[None, :, 0] - p1[0])
+        e = B - A  # [S, 2]
+        o3 = e[None, :, 0] * (p1[1] - A[None, :, 1]) - e[None, :, 1] * (p1[0] - A[None, :, 0])
+        o4 = e[None, :, 0] * (p2[:, None, 1] - A[None, :, 1]) - e[None, :, 1] * (p2[:, None, 0] - A[None, :, 0])
+        cross = (o1 * o2 < 0) & (o3 * o4 < 0)
+        # an "other" edge that touches the far end u is adjacent to (v,u): never a proper crossing
+        adj = (ea_s[None, :] == U[:, None]) | (eb_s[None, :] == U[:, None])
+        return bool(np.any(cross & ~adj))
+
+
+def _node_crosses(g: nx.Graph, pos: dict[str, np.ndarray], v: str, E: list[tuple[str, str]]) -> bool:  # kept for API compatibility
+    return _NodeCrossChecker(g).crosses(pos, v)
 
 
 def _seg_cross(p1, p2, p3, p4) -> bool:  # noqa: ANN001
