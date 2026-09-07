@@ -194,3 +194,24 @@ the planarity guard is a safety valve (no measurable change). R09–R14 and thes
 
 **Bug fixed before the rerun:** `run_real_data_round5.sh` checked `$?` after an `&& … || true` chain (always 0) so the v2
 checkpoint was never retrained; `train_stage2.py` now compares the cached `meta.json` `feat_version` with the code.
+
+
+## Stage 3 — corridor adaptation, first corpus-wide run (Mac, 2026-09-07; 200 test floors, 5 skipped > 120 nodes)
+`python scripts/evaluate_stage3.py --split test --limit 200` on the complete real M networks, fitted into their own
+outline (`self`) and into the closest-area outline of another mall (`transfer`). Outline source: `*_total.csv` polygons
+(mask folder not yet wired at run time), pixel scale 0.5 m/px default.
+
+| protocol | n | planar (0 crossings) | all inside | ortho dev | corridor ratio (real) | entrances | atria | chamfer vs random | fit s |
+|---|---|---|---|---|---|---|---|---|---|
+| self | 195 | 94.9% | 100% | 5.9° | 0.19 (0.17) | 4.0 | 2.3 | 23.1 m vs 29.7 m (median ratio 0.71; better in 90%) | 1.2 |
+| transfer | 195 | 93.3% | 100% | 6.3° | 0.19 (0.20) | 4.1 | 2.3 | – | – |
+
+Crossings are concentrated in large networks (mean 1.05 for > 40 nodes vs 0.02 for ≤ 40). Median floor: 28 nodes,
+18 400 m². **Calibration from the real positions**: outer M nodes sit at 0.183·√area from the façade (IQR 0.155–0.215,
+not correlated with √area beyond that) while the fit used a fixed 14 m (0.11·√area) → `FitParams.depth_area_coef=0.18`.
+
+**Designer feedback on F09 (real data)**: generated corridors showed frequent acute bends / saw-tooth edges. Measured on
+the sample floor: real network 8% of node angles < 45°, 13.5% < 60°; fitted 34% / 35%. Fixes: angle-opening force +
+post-pass `open_angles` (min 60°), `sharp_angle_rate` in the fit score (fitted now 11–16% < 45°), renderer buffers the
+merged centre-lines with round joins, morphological closing (r = w/2), kiosk-size holes filled, atria must be compact
+(aspect ≤ 4, min side ≥ 1.5 w) and never overlap corridors. Re-run of the 200-floor evaluation pending.

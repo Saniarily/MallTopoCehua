@@ -31,7 +31,7 @@ from mall_space_planner.stage3.evaluate import evaluate_fit
 from mall_space_planner.stage3.outline import m_positions_from_total_csv
 from mall_space_planner.utils import ProjectPaths, resolve_config, setup_logging
 
-KEEP = ["crossings", "inside_ratio", "ortho_deviation_deg", "spacing_violation_rate", "served_area_ratio", "corridor_ratio", "n_entrances", "n_atria",
+KEEP = ["crossings", "inside_ratio", "ortho_deviation_deg", "sharp_angle_rate", "spacing_violation_rate", "served_area_ratio", "corridor_ratio", "n_entrances", "n_atria", "n_vertical_cores", "n_dead_ends",
         "outer_facade_dist_m", "gt_outer_facade_dist_m", "chamfer_m", "chamfer_rand_m", "procrustes_rmse_m", "procrustes_rmse_rand_m", "procrustes_rmse_norm"]
 
 
@@ -87,7 +87,8 @@ def main() -> None:
                 rows.append({"floor_id": fid, "mall_id": mall, "protocol": "self", "status": "skipped_large", "n_nodes": topo.num_nodes}); continue
             print(f"  [{i + 1}/{len(samples)}] {fid}: {topo.num_nodes} nodes, outline {outline.area:.0f} m2", flush=True)
             gt = m_positions_from_total_csv(tp, outline)
-            res = fitter.fit(topo, outline, seed=a.seed); plan = render_corridors(topo, res.positions, outline, res.roles, rp)
+            sk_nodes = set(smp.skeleton.nodes) & set(topo.nodes)
+            res = fitter.fit(topo, outline, seed=a.seed, skeleton_nodes=sk_nodes); plan = render_corridors(topo, res.positions, outline, res.roles, rp, skeleton_nodes=sk_nodes)
             ev = evaluate_fit(topo, res, plan, outline, gt_positions={k: gt[k] for k in topo.nodes if k in gt})
             row = {"floor_id": fid, "mall_id": mall, "protocol": "self", "status": "ok", "n_nodes": topo.num_nodes, "outline_area_m2": outline.area,
                    "scale_source": outline.scale_source, "real_corridor_ratio": outline.extra.get("real_corridor_ratio"), **{k: ev.get(k) for k in KEEP}}
@@ -100,7 +101,7 @@ def main() -> None:
                 if not cands:
                     rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "no_candidate_outline", "n_nodes": topo.num_nodes})
                 if cands:
-                    o2 = ds.outline(cands[0], 0); res2 = fitter.fit(topo, o2, seed=a.seed); plan2 = render_corridors(topo, res2.positions, o2, res2.roles, rp)
+                    o2 = ds.outline(cands[0], 0); res2 = fitter.fit(topo, o2, seed=a.seed, skeleton_nodes=sk_nodes); plan2 = render_corridors(topo, res2.positions, o2, res2.roles, rp, skeleton_nodes=sk_nodes)
                     ev2 = evaluate_fit(topo, res2, plan2, o2)
                     rows.append({"floor_id": fid, "mall_id": mall, "protocol": "transfer", "status": "ok", "target_outline": cands[0], "n_nodes": topo.num_nodes,
                                  "outline_area_m2": o2.area, "real_corridor_ratio": o2.extra.get("real_corridor_ratio"), **{k: ev2.get(k) for k in KEEP if k in ev2}})

@@ -39,6 +39,9 @@ from mall_space_planner.topology.convert import to_networkx
 class FitParams:
     shop_depth: float = 14.0  # m – outer corridor sits this far inside the façade (capped by ``depth_frac`` × mean floor width)
     depth_frac: float = 0.28  # mean floor width = 2·area/perimeter; depth ≤ depth_frac × that
+    depth_area_coef: float = 0.18  # real floors (195 test floors): outer M nodes sit ≈ 0.18·√area inside the façade (median; IQR 0.155–0.215)
+    min_angle_deg: float = 60.0  # corridors meeting at a node open at least this much (real: only 13% of node angles < 60°)
+    w_angle: float = 0.8  # weight of the angle-opening force
     n_offsets: int = 12  # rotational offsets tried when pinning the outer loop onto the inset boundary
     min_spacing: float = 12.0  # m – minimum distance between non-adjacent key points
     iters: int = 120
@@ -46,7 +49,7 @@ class FitParams:
     w_boundary: float = 1.0  # outer loop -> inset boundary
     w_axis: float = 0.8  # branches -> medial axis
     w_ortho: float = 0.6  # edge direction -> wall frame
-    w_repel: float = 1.0
+    w_repel: float = 2.0
     w_straight: float = 0.4  # degree-2 nodes: keep the two edges collinear
     snap_dist: float = 6.0  # corner snapping distance
     n_restarts: int = 6
@@ -81,11 +84,14 @@ def _roles(g: nx.Graph, info: dict) -> dict[str, str]:
     return r
 
 
-def effective_depth(outline: Outline, shop_depth: float, depth_frac: float) -> float:
-    """Shop depth capped so that narrow floors keep a usable inset (mean width = 2·A/P)."""
+def effective_depth(outline: Outline, shop_depth: float, depth_frac: float, depth_area_coef: float = 0.0) -> float:
+    """Inset depth of the outer corridor. ``shop_depth`` is the nominal value; with ``depth_area_coef`` > 0 the depth
+    scales with the floor (``coef·√area``, calibrated on real floors) and ``shop_depth`` acts as a floor; both are
+    capped by ``depth_frac`` × mean floor width so narrow wings keep a usable inset."""
     poly = outline.polygon
     mean_w = 2.0 * poly.area / max(poly.exterior.length, 1e-9)
-    return float(max(3.0, min(shop_depth, depth_frac * mean_w)))
+    d = shop_depth if depth_area_coef <= 0 else max(shop_depth, depth_area_coef * float(np.sqrt(poly.area)))
+    return float(max(3.0, min(d, depth_frac * mean_w)))
 
 
 def _arc_positions(ring: np.ndarray, n: int, offset: float, reverse: bool) -> np.ndarray:
@@ -249,6 +255,26 @@ def _crossings(g: nx.Graph, pos: dict[str, np.ndarray]) -> int:
     return count_crossings(g, pos)
 
 
+def node_angles(g: nx.Graph, pos: dict[str, np.ndarray]) -> np.ndarray:
+    """All angles (degrees) between pairs of edges meeting at a node."""
+    out = []
+    for v in g.nodes:
+        nb = list(g.neighbors(v))
+        for i in range(len(nb)):
+            for j in range(i + 1, len(nb)):
+                a, b = np.asarray(pos[nb[i]]) - pos[v], np.asarray(pos[nb[j]]) - pos[v]
+                La, Lb = np.linalg.norm(a), np.linalg.norm(b)
+                if La < 1e-9 or Lb < 1e-9:
+                    continue
+                out.append(np.degrees(np.arccos(np.clip(np.dot(a, b) / (La * Lb), -1, 1))))
+    return np.asarray(out, float)
+
+
+def sharp_angle_rate(g: nx.Graph, pos: dict[str, np.ndarray], min_deg: float) -> float:
+    A = node_angles(g, pos)
+    return float(np.mean(A < min_deg)) if len(A) else 0.0
+
+
 # ----------------------------------------------------------------------------------------- fitter
 class CorridorFitter:
     def __init__(self, params: FitParams | None = None) -> None:
@@ -277,12 +303,15 @@ class CorridorFitter:
         keys = list(g.nodes)
         D = np.linalg.norm(P[:, None] - P[None], axis=-1) + np.eye(len(P)) * 1e9
         adj = nx.to_numpy_array(g, nodelist=keys) > 0
-        viol = float(np.mean((D < self.p.min_spacing) & ~adj)) if len(P) > 1 else 0.0
+        # share of *nodes* that have a non-adjacent node closer than min_spacing (pair-fraction was ~0 for any layout)
+        viol = float(np.mean(((D < self.p.min_spacing) & ~adj).any(1))) if len(P) > 1 else 0.0
         # coverage: share of the inset within one shop depth of a corridor, estimated on a coarse grid of sample
         # points (a shapely buffer of the whole network costs ~0.3 s per call, this is ~1 ms)
         cover = self._coverage(g, pos, inset)
-        s = 3.0 * (1 - inside) + 2.0 * cross + 0.8 * near_b + 0.5 * near_a + 0.8 * ortho + 2.0 * viol + 1.0 * (1 - cover)
-        return s, {"inside_ratio": inside, "crossings": cross, "outer_to_boundary_m": near_b * self.p.shop_depth, "branch_to_axis_m": near_a * self.p.shop_depth, "ortho_deviation_deg": ortho * 45.0, "spacing_violation_rate": viol, "served_area_ratio": cover}
+        # sharp wedges: share of node angles below min_angle (real floors: ≈ 0.13 below 60°)
+        sharp = sharp_angle_rate(g, pos, self.p.min_angle_deg)
+        s = 3.0 * (1 - inside) + 2.0 * cross + 0.8 * near_b + 0.5 * near_a + 0.8 * ortho + 2.0 * viol + 1.0 * (1 - cover) + 1.5 * sharp
+        return s, {"inside_ratio": inside, "crossings": cross, "outer_to_boundary_m": near_b * self.p.shop_depth, "branch_to_axis_m": near_a * self.p.shop_depth, "ortho_deviation_deg": ortho * 45.0, "spacing_violation_rate": viol, "served_area_ratio": cover, "sharp_angle_rate": sharp}
 
     def _coverage(self, g: nx.Graph, pos: dict[str, np.ndarray], inset: Polygon, n_grid: int = 24) -> float:
         key = id(inset)
@@ -345,6 +374,29 @@ class CorridorFitter:
                     cosang = np.dot(da, db) / (np.linalg.norm(da) * np.linalg.norm(db) + 1e-9)
                     if cosang < -0.5:  # already roughly straight -> straighten fully
                         disp[v] += p.w_straight * (mid - pos[v]) * 0.3
+            # angle opening: two corridors leaving a node at < min_angle form a sharp wedge that no real mall has
+            # (a shop cannot fit in it); rotate both far ends apart around the node until the angle opens
+            cos_min = np.cos(np.radians(p.min_angle_deg))
+            for v in nodes:
+                nb = list(g.neighbors(v))
+                if len(nb) < 2:
+                    continue
+                for i in range(len(nb)):
+                    for j in range(i + 1, len(nb)):
+                        a, b = nb[i], nb[j]
+                        da, db = pos[a] - pos[v], pos[b] - pos[v]
+                        La, Lb = np.linalg.norm(da), np.linalg.norm(db)
+                        if La < 1e-9 or Lb < 1e-9:
+                            continue
+                        c = np.dot(da, db) / (La * Lb)
+                        if c > cos_min:  # angle too small
+                            # perpendicular directions pushing a and b apart (rotation about v)
+                            na = np.array([-da[1], da[0]]) / La
+                            nb_ = np.array([-db[1], db[0]]) / Lb
+                            sgn = 1.0 if np.cross(da, db) < 0 else -1.0  # open away from each other
+                            k = p.w_angle * (c - cos_min) * min(La, Lb) * 0.5
+                            disp[a] += sgn * na * k
+                            disp[b] -= sgn * nb_ * k
             # repulsion (vectorised; coincident nodes get a deterministic tiny offset)
             P = np.array([pos[v] for v in nodes])
             D = P[:, None] - P[None]
@@ -443,6 +495,61 @@ class CorridorFitter:
                 pos[v] = best[1]
         return pos
 
+    def open_angles(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, passes: int = 3) -> dict[str, np.ndarray]:
+        """Post-pass: for every sharp wedge (angle < min_angle at node v between neighbours a, b) try moving the
+        endpoint that is not on the outer loop (or the shorter arm) sideways so the angle opens to ~min_angle;
+        the move is kept only if it stays inside the inset, creates no crossing and does not create a new sharp wedge
+        elsewhere. Purely local; the graph is unchanged."""
+        p = self.p
+        pos = {k: v.copy() for k, v in pos.items()}
+        checker = _NodeCrossChecker(g)
+        nodes = list(g.nodes)
+        nid = {v: i for i, v in enumerate(nodes)}
+        target = np.radians(p.min_angle_deg)
+        for _ in range(passes):
+            moved = 0
+            for v in nodes:
+                nb = list(g.neighbors(v))
+                for i in range(len(nb)):
+                    for j in range(i + 1, len(nb)):
+                        a, b = nb[i], nb[j]
+                        da, db = pos[a] - pos[v], pos[b] - pos[v]
+                        La, Lb = np.linalg.norm(da), np.linalg.norm(db)
+                        if La < 1e-9 or Lb < 1e-9:
+                            continue
+                        ang = np.arccos(np.clip(np.dot(da, db) / (La * Lb), -1, 1))
+                        if ang >= target:
+                            continue
+                        # candidate mover: prefer non-outer, then the shorter arm
+                        order = sorted([a, b], key=lambda n: (roles.get(n) == "outer", np.linalg.norm(pos[n] - pos[v])))
+                        before = sharp_angle_rate(g, pos, p.min_angle_deg)
+                        for m in order:
+                            other = b if m == a else a
+                            dm, do = pos[m] - pos[v], pos[other] - pos[v]
+                            Lm = np.linalg.norm(dm)
+                            # rotate the arm v->m away from v->other to reach the target angle (try both senses)
+                            base = np.arctan2(do[1], do[0])
+                            cur = np.arctan2(dm[1], dm[0])
+                            sgn = 1.0 if ((cur - base + np.pi) % (2 * np.pi) - np.pi) >= 0 else -1.0
+                            for frac in (1.0, 0.75, 0.5):
+                                new_ang = base + sgn * (target * frac + (1 - frac) * ang)
+                                cand = pos[v] + np.array([np.cos(new_ang), np.sin(new_ang)]) * Lm
+                                cand = _project_inside(cand, inset)
+                                old = pos[m]
+                                pos[m] = cand
+                                Pcur = np.array([pos[n] for n in nodes])
+                                ok = not checker.crosses(pos, m, Pcur) and sharp_angle_rate(g, pos, p.min_angle_deg) < before
+                                if ok:
+                                    moved += 1
+                                    break
+                                pos[m] = old
+                            else:
+                                continue
+                            break
+            if moved == 0:
+                break
+        return pos
+
     def snap_corners(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon) -> dict[str, np.ndarray]:
         corners = np.array(inset.exterior.coords[:-1])
         pos = {k: v.copy() for k, v in pos.items()}
@@ -463,18 +570,19 @@ class CorridorFitter:
         return pos
 
     # ---- main -----------------------------------------------------------------------------------
-    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0) -> FitResult:
+    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None) -> FitResult:
+        """``skeleton_nodes`` (Stage-1 prototype): its cycle becomes the outer loop pinned to the inset boundary."""
         p = self.p
         g = to_networkx(topology)
         rng = np.random.RandomState(seed)
-        depth = effective_depth(outline, p.shop_depth, p.depth_frac)
+        depth = effective_depth(outline, p.shop_depth, p.depth_frac, p.depth_area_coef)
         inset = inset_region(outline, depth)
         # spacing adapts to how many key points must share the inset (never above the configured value)
         self._spacing_backup = p.min_spacing
         p.min_spacing = float(min(p.min_spacing, 0.85 * np.sqrt(inset.area / max(g.number_of_nodes(), 1))))
         _, lines = medial_axis_graph(outline, depth, px=p.raster_px)
         frame = dominant_directions(outline.polygon)
-        _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0))
+        _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0), skeleton_nodes=skeleton_nodes)
         roles = _roles(g, info)
         cands = _init_on_inset(g, roles, list(info.get("outer_cycle", [])), inset, lines, depth, p.snap_dist, p.n_offsets)
         scored = []
@@ -493,6 +601,7 @@ class CorridorFitter:
             pos0 = self.repair_crossings(g, pos0, roles, inset, rng)  # planar start (relax never introduces crossings)
             pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng)
             pos1 = self.snap_corners(g, pos1, roles, inset)
+            pos1 = self.open_angles(g, pos1, roles, inset)
             if count_crossings(g, pos1):
                 pos1 = self.repair_crossings(g, pos1, roles, inset, rng)
             s, diag = self.score(g, pos1, roles, inset, lines, frame)

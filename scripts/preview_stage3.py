@@ -46,6 +46,7 @@ def main() -> None:
     ap.add_argument("--outline-total", default=None, help="use another floor's total.csv as the target outline")
     ap.add_argument("--outline-json", default=None, help="hand-drawn polygon: JSON list of [x, y] in metres")
     ap.add_argument("--area", type=float, default=None, help="gross floor area m2 (for pixel scale)")
+    ap.add_argument("--skeleton", default=None, help="*_M_simplified.csv of the same floor: its edges are drawn as main corridors")
     ap.add_argument("--shop-depth", type=float, default=14.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="/tmp/stage3_preview.png")
@@ -65,8 +66,9 @@ def main() -> None:
         outline, transfer = src_outline, False
 
     fitter = CorridorFitter(FitParams(shop_depth=a.shop_depth))
-    res = fitter.fit(topo, outline, seed=a.seed)
-    plan = render_corridors(topo, res.positions, outline, res.roles, RenderParams())
+    sk_nodes = set(load_target_csv(Path(a.skeleton)).nodes) if a.skeleton else None
+    res = fitter.fit(topo, outline, seed=a.seed, skeleton_nodes=sk_nodes)
+    plan = render_corridors(topo, res.positions, outline, res.roles, RenderParams(), skeleton_nodes=sk_nodes)
     ev = evaluate_fit(topo, res, plan, outline, gt_positions=None if transfer else gt_pos)
     print(json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in ev.items()}, ensure_ascii=False, indent=1))
 
@@ -106,8 +108,10 @@ def main() -> None:
     for e in plan.entrances:
         _draw_poly(ax, e["stub"], fc="#F0C987", ec="#b07a2a", lw=0.4)
         ax.scatter([e["point"][0]], [e["point"][1]], marker="v", s=60, c="#D9480F", zorder=6)
+    for vc in plan.vertical_cores:
+        _draw_poly(ax, vc["polygon"], fc="#9aa5b1", ec="#444", lw=0.5)
     d = plan.diagnostics
-    ax.set_title(f"corridors: main {d['main_length_m']:.0f} m / sec {d['secondary_length_m']:.0f} m, {d['n_entrances']} entrances, {d['n_atria']} atria, {d['corridor_ratio']*100:.0f}% of floor", fontsize=9)
+    ax.set_title(f"corridors: main {d['main_length_m']:.0f} m / sec {d['secondary_length_m']:.0f} m, {d['n_entrances']} entrances, {d['n_vertical_cores']} vertical cores, {d['n_atria']} atria, {d['corridor_ratio']*100:.0f}% of floor", fontsize=9)
     for ax in axes:
         ax.set_aspect("equal")
         ax.autoscale()

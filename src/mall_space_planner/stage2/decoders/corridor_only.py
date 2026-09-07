@@ -27,8 +27,8 @@ class CorridorOnlyDecoder(BaseGeometryDecoder):
     def decode(self, topology: TopologyGraph, request: GenerationRequest, seed: int) -> GeneratedLayout:
         c = request.constraints
         outline = Outline(polygon=Polygon(request.boundary.exterior, holes=request.boundary.holes or None).buffer(0), flip_y=False, scale_source="given", source="request")
-        res = CorridorFitter(FitParams(shop_depth=c.shop_depth * 0.5, n_restarts=self.n_restarts, iters=self.iters)).fit(topology, outline, seed=seed)
-        plan = render_corridors(topology, res.positions, outline, res.roles, self.render)
+        res = CorridorFitter(FitParams(shop_depth=c.shop_depth * 0.5, n_restarts=self.n_restarts, iters=self.iters)).fit(topology, outline, seed=seed, skeleton_nodes=set(request.prototype.graph.nodes))
+        plan = render_corridors(topology, res.positions, outline, res.roles, self.render, skeleton_nodes=set(request.prototype.graph.nodes))
         diag = {**res.diagnostics, **plan.diagnostics, "inside_ratio": res.diagnostics.get("inside_ratio", 1.0), "site_area_m2": float(outline.area), "n_shops": 0}
         diag.pop("roles", None)
         return GeneratedLayout(layout_id=f"L{uuid.uuid4().hex[:8]}", prototype_id=request.prototype.prototype_id, boundary=request.boundary, topology=topology, skeleton_positions=res.positions, units=plan.units, constraints=c, diagnostics=diag, seed=seed)

@@ -301,7 +301,7 @@ class SpaceUnit(BaseModel):
     """A 2-D space unit produced by Stage 2 (shop, corridor segment, atrium, entrance)."""
 
     unit_id: str
-    kind: Literal["shop", "anchor", "corridor", "junction", "atrium", "entrance"]
+    kind: Literal["shop", "anchor", "corridor", "junction", "atrium", "entrance", "vertical_core"]
     polygon: list[tuple[float, float]] | None = None
     centroid: tuple[float, float] | None = None
     area: float | None = None
