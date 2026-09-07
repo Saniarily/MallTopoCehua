@@ -31,7 +31,7 @@ from mall_space_planner.stage3.evaluate import evaluate_fit
 from mall_space_planner.stage3.outline import m_positions_from_total_csv
 from mall_space_planner.utils import ProjectPaths, resolve_config, setup_logging
 
-KEEP = ["crossings", "inside_ratio", "ortho_deviation_deg", "spacing_violation_rate", "served_area_ratio", "corridor_ratio", "n_entrances", "n_atria",
+KEEP = ["crossings", "inside_ratio", "ortho_deviation_deg", "sharp_angle_rate", "spacing_violation_rate", "served_area_ratio", "corridor_ratio", "n_entrances", "n_atria",
         "outer_facade_dist_m", "gt_outer_facade_dist_m", "chamfer_m", "chamfer_rand_m", "procrustes_rmse_m", "procrustes_rmse_rand_m", "procrustes_rmse_norm"]
 
 

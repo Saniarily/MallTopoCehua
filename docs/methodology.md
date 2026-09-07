@@ -73,6 +73,6 @@ outline (px→m, flip_y)  →  inset = outline ⊖ 店铺纵深 d   →  medial 
    + 与真实同层 M CenterPoint 对比：procrustes_rmse(带标签)、chamfer(无标签)、各自的随机基线、外环到立面距离(拟合 vs 真实)
 ```
 
-生成规则（从真实平面归纳，见 `stage3/fit.py` 顶部注释）：R1 外环走廊沿立面内侧一个店铺纵深；R2 环内的洞是中庭，不是店铺；R3 支路垂直于所在环/主墙向；R4 走廊尽量顺主墙向、拐角处转折；R5 非邻接关键点 ≥ min_spacing（随 inset 面积/节点数自适应）；R6 拓扑不改、平面性不破；R7 走廊面积占比 ≈ 真实分布 0.12–0.25。
+生成规则（从真实平面归纳，见 `stage3/fit.py` 顶部注释）：R1 外环走廊沿立面内侧一个店铺纵深（真实数据：0.18·√面积，IQR 0.155–0.215）；R0 **走廊在节点处的夹角 ≥ 60°**（真实网络仅 13% 的夹角小于 60°；锐角楔形放不下商铺）——松弛中的开角力 + 后处理 `open_angles`，评分含 `sharp_angle_rate`；成廊时对合并后的中心线做圆角缓冲 + 闭运算（半径 = 半廊宽），走廊读作连续光滑的带而非锯齿；R2 环内的洞是中庭，不是店铺；R3 支路垂直于所在环/主墙向；R4 走廊尽量顺主墙向、拐角处转折；R5 非邻接关键点 ≥ min_spacing（随 inset 面积/节点数自适应）；R6 拓扑不改、平面性不破；R7 走廊面积占比 ≈ 真实分布 0.12–0.25。
 
 样例（B000A0E928_1，50 个 M 点，走廊来自 `_total.csv`）：crossings 0、inside 1.0、ortho 8°、corridor 28%、2 出入口 2 中庭；chamfer 明显优于随机（测试 `tests/unit/test_stage3_corridor.py`）。**Procrustes 在细长楼层上被长轴主导（随机放置也只有 ≈0.2×对角线），报告时以 chamfer + 随机基线为主。** 全库评估需要 Mac 上的 `*_total.csv`（`scripts/preview_stage3.py` 单层；批量脚本待补）。

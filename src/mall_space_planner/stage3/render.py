@@ -43,6 +43,9 @@ class RenderParams:
     atrium_area_max: float = 900.0
     min_atrium_area: float = 80.0
     junction_pad: float = 1.25  # pad side = width × this
+    smooth_radius: float = 0.0  # m – closing radius for the corridor body (fills notches at bends); 0 = auto: 0.5 × main width
+    fill_hole_area: float = 60.0  # m² – holes in the corridor body smaller than this become plaza (kiosk-size islands are noise)
+    fillet: bool = True  # round joins and caps (real corridors are smooth ribbons, no mitre spikes)
 
 
 @dataclass
@@ -67,6 +70,23 @@ def _polys(geom) -> list[Polygon]:  # noqa: ANN001
     if isinstance(geom, Polygon):
         return [geom]
     return [g for g in getattr(geom, "geoms", []) if isinstance(g, Polygon) and not g.is_empty]
+
+
+def _smooth(geom, r: float, fill_hole_area: float = 0.0):  # noqa: ANN001, ANN202
+    """Morphological *closing* (dilate then erode by ``r``): fills notches and re-entrant spikes narrower than 2r so
+    two corridors meeting at an angle read as one continuous ribbon with a rounded inner corner. Holes smaller than
+    ``fill_hole_area`` (tiny islands between crowded corridors) are filled – they read as plaza, not as shops.
+    No opening step – it would eat thin secondary corridors."""
+    if geom is None or geom.is_empty:
+        return geom
+    g = geom.buffer(r, join_style="round").buffer(-r, join_style="round").buffer(0) if r > 0 else geom
+    if fill_hole_area > 0:
+        parts = []
+        for p in _polys(g):
+            keep = [ring for ring in p.interiors if Polygon(ring).area >= fill_hole_area]
+            parts.append(Polygon(p.exterior, keep))
+        g = unary_union(parts) if parts else g
+    return g
 
 
 def classify_edges(g: nx.Graph, quantile: float, roles: dict[str, str] | None = None) -> dict[tuple[str, str], str]:
@@ -110,7 +130,7 @@ def _stub_to_facade(p: np.ndarray, outline: Polygon, direction_hint: np.ndarray 
             cand = min(pts, key=lambda x: np.linalg.norm(x - p))
             if np.linalg.norm(cand - p) < 2.0 * L + 5:
                 fp = cand
-    stub = LineString([p, fp]).buffer(width / 2, cap_style="flat").buffer(width * 0.02)
+    stub = LineString([p, fp]).buffer(width / 2, cap_style="flat", join_style="round").buffer(width * 0.02)
     return stub, fp
 
 
@@ -125,19 +145,23 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
         if u in pos and v in pos and np.linalg.norm(pos[u] - pos[v]) > 1e-6:
             (main_segs if c == "main" else sec_segs).append(LineString([pos[u], pos[v]]))
     w_main, w_sec = widths_for(site.area, sum(s.length for s in main_segs), sum(s.length for s in sec_segs), prm)
-    main = unary_union([s.buffer(w_main / 2, cap_style="flat", join_style="mitre") for s in main_segs]) if main_segs else Polygon()
-    sec = unary_union([s.buffer(w_sec / 2, cap_style="flat", join_style="mitre") for s in sec_segs]) if sec_segs else Polygon()
-    # junction pads
+    join = "round" if prm.fillet else "mitre"
+    cap = "round" if prm.fillet else "flat"
+    # buffer the *merged* centre-lines (one MultiLineString) so that consecutive segments join smoothly instead of
+    # overlapping as separate rectangles (which leaves notches at every bend)
+    main = unary_union(main_segs).buffer(w_main / 2, cap_style=cap, join_style=join) if main_segs else Polygon()
+    sec = unary_union(sec_segs).buffer(w_sec / 2, cap_style=cap, join_style=join) if sec_segs else Polygon()
+    # junction pads (round plazas at nodes with degree >= 3)
     pads = []
     for v in g.nodes:
         if g.degree(v) >= 3 and v in pos:
             w = w_main if any(cls.get((v, u), cls.get((u, v))) == "main" for u in g.neighbors(v)) else w_sec
-            s = w * prm.junction_pad / 2
-            pads.append(Polygon([pos[v] + [-s, -s], pos[v] + [s, -s], pos[v] + [s, s], pos[v] + [-s, s]]))
+            pads.append(Point(pos[v]).buffer(w * prm.junction_pad / 2))
     if pads:
         main = unary_union([main, *pads])
-    main = main.intersection(site).buffer(0)
-    sec = sec.difference(main).intersection(site).buffer(0)
+    r_s = prm.smooth_radius if prm.smooth_radius > 0 else 0.5 * w_main
+    main = _smooth(main, r_s, prm.fill_hole_area).intersection(site).buffer(0)
+    sec = _smooth(sec.difference(main), r_s * w_sec / w_main, prm.fill_hole_area).intersection(site).buffer(0)
     # entrances
     entrances: list[dict] = []
     cands = []
@@ -169,9 +193,16 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
     if main_segs:
         faces = list(polygonize(unary_union(main_segs)))
         for f in sorted(faces, key=lambda q: -q.area):
-            hole = f.buffer(-w_main / 2).buffer(0)
-            hole = max(_polys(hole), key=lambda q: q.area) if _polys(hole) else Polygon()  # shrinking can split a face
+            hole = f.buffer(-w_main / 2 - r_s * 0.5, join_style="round").buffer(0)
+            hole = hole.difference(unary_union([main, sec]).buffer(r_s * 0.5)).buffer(0)  # never overlap a corridor
+            hole = max(_polys(hole), key=lambda q: q.area) if _polys(hole) else Polygon()  # shrinking/subtracting can split a face
             if hole.is_empty or hole.area < prm.min_atrium_area:
+                continue
+            # an atrium is a compact void, not a long sliver between two parallel corridors
+            mrr = hole.minimum_rotated_rectangle
+            xs, ys = np.array(mrr.exterior.coords[:-1]).T
+            e1, e2 = np.hypot(xs[1] - xs[0], ys[1] - ys[0]), np.hypot(xs[2] - xs[1], ys[2] - ys[1])
+            if min(e1, e2) < 1.5 * w_main or max(e1, e2) / max(min(e1, e2), 1e-9) > 4.0:
                 continue
             if hole.area > prm.atrium_area_max:
                 lo, hi = 0.0, float(np.sqrt(hole.area))
