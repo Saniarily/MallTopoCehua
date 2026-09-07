@@ -1,0 +1,6 @@
+# data-derived Stage-2 outline thresholds (quantile 0.95 of the ground-truth row, n=575)
+stage2:
+  evaluator:
+    name: topology_spec
+    params:
+      thresholds: {"node_deviation_pct_max": 0.0, "density_deviation_pct_max": 34.0, "aspl_deviation_pct_max": 17.0, "edge_accuracy_pct_min": 70.0, "inference_time_s_max": 60.0}

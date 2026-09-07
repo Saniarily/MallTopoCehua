@@ -1,0 +1,10 @@
+{
+  "n_floors_seen": 6005,
+  "n_written": 5589,
+  "n_missing_target": 0,
+  "n_missing_skeleton": 373,
+  "n_skeleton_not_subgraph": 0,
+  "n_target_disconnected": 1312,
+  "n_no_growth": 43,
+  "n_bad": 0
+}

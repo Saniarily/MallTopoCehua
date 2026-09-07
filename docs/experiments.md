@@ -164,22 +164,33 @@ anchors, planarity guard; `FEAT_VERSION=3`, old checkpoints must be retrained); 
 
 **Run (Mac):** `bash scripts/run_real_data_round5.sh` (or `GRAPH_DIR=... bash ...`). Results → `outputs/experiments/stage2_eval_r5/table.md`.
 
-### Round 5 — first Mac run (2026-09-07, partial)
-Corpus v2 built: **5589 samples** from 6005 floors (373 missing skeleton, 43 no growth, 0 skeleton-not-subgraph, 0 bad).
-1312 targets (23%) are *disconnected* in the export (n_components 1.31 on the ground-truth row) — kept, but this is why
-ground truth itself only passes 93–96% (density/ASPL computed per component). Eval set = first 575 of the test split.
+### Round 5 — Mac run complete (2026-09-07) — canonical Stage-2 results
+Corpus v2: **5589 samples** from 6005 floors (373 missing skeleton, 43 no growth, 0 skeleton-not-subgraph, 0 bad);
+1312 targets (23%) are *disconnected* in the export → the ground-truth row itself passes only 93.2%. Eval = first
+575 of the test split, 3 seeds, thresholds calibrated on ground truth (q=0.95: density ≤34%, ASPL ≤17%).
+Snapshot: `data/results_snapshot/stage2/r5_*`, checkpoints' `meta.json` in `checkpoints_r5/` (all `feat_version: 3`).
 
-| generator (seed 0) | overall_pass | density dev % | ASPL dev % | target-edge recall / precision % | attach recall / precision % | degree EMD |
-|---|---|---|---|---|---|---|
-| ground truth (calibrated thresholds) | 0.932 | 11.0 | 7.1 | 100 / 100 | 100 / 100 | 0 |
-| rule_expander | 0.868 (s1 0.842, s2 0.934) | 13.0 | 9.0 | 58.3 / 57.4 | 38.8 / 35.0 | 0.37 |
-| search_expander | 0.970 (s1 0.976, s2 0.976) | 9.5 | 2.6 | 58.3 / 58.7 | 44.5 / 39.9 | 0.36 |
-| ar_gnn v3 (+greedy, bestof16, bfs ablation) | **not run** — stale v2 checkpoint was reused → `feat_version 2 != 3` | | | | | |
+| experiment | pass | density dev % | ASPL dev % | attach recall % | attach precision % | degree EMD | new-new ratio | s/sample |
+|---|---|---|---|---|---|---|---|---|
+| ref_ground_truth | 0.932 | 11.0 | 7.1 | 100 | 100 | 0 | 0.232 | – |
+| rule_baseline | 0.881 ± 0.039 | 14.7 | 7.9 | 41.6 ± 2.9 | 34.6 ± 3.4 | 0.383 | 0.180 | 0.006 |
+| search_baseline (rule best-of-16) | **0.974 ± 0.002** | 8.2 | **2.3** | 43.1 ± 1.2 | 40.7 ± 0.8 | 0.359 | 0.175 | 0.12 |
+| ar_gnn v3 | 0.871 ± 0.016 | 8.6 | 11.1 | **66.1 ± 2.3** | **71.4 ± 2.1** | 0.220 | 0.221 | 0.06 |
+| ar_gnn greedy decode | 0.619 | 5.5 | 46.8 | 47.1 | 80.2 | 0.297 | 0.353 | 0.06 |
+| ar_gnn best-of-16 | 0.943 ± 0.000 | **6.2** | 4.5 | 64.3 ± 0.1 | 70.9 ± 0.2 | **0.202** | 0.223 | 1.02 |
+| abl: bfs order | 0.878 ± 0.021 | 9.6 | 9.9 | 68.2 ± 4.3 | 69.3 ± 2.8 | 0.222 | 0.212 | 0.06 |
+| abl: greedy order | 0.769 ± 0.067 | 10.8 | 15.5 | 62.1 ± 4.7 | 70.1 ± 2.8 | 0.240 | 0.268 | 0.06 |
+| abl: single-anchor loss | 0.545 ± 0.137 | 30.4 | 15.9 | 80.8 ± 3.2 | 54.6 ± 2.8 | 0.464 | 0.162 | 0.08 |
+| abl: no planarity guard | 0.882 ± 0.013 | 9.2 | 10.8 | 67.6 ± 2.9 | 71.2 ± 2.0 | 0.220 | 0.218 | 0.06 |
 
-Note: target-edge recall is identical (58.3%) for every generator = the skeleton edges (kept verbatim) over target edges;
-the discriminative numbers are *attach* recall/precision and degree EMD. AR-GNN greedy_order retrained on v3:
-val anchor acc 0.444 / top-3 0.670 / has2 0.910 (10 epochs).
+Validation (first-anchor acc / top-3 / stop acc, 10 epochs): label order 0.410 / 0.678 / 0.872; greedy order 0.444 / 0.670 / 0.910;
+bfs order 0.302 / 0.535 / 0.894; single-label 0.314 / 0.566 / –.
 
-**Bug fixed:** `run_real_data_round5.sh` checked `$?` after an `&& … || true` chain (always 0) so the v2 checkpoint was
-never retrained; `train_stage2.py` now compares the cached `meta.json` `feat_version` with the code and retrains when
-stale. Re-run `bash scripts/run_real_data_round5.sh` — finished cells are skipped; only the AR-GNN cells re-run.
+Reading: `target_edge_recall` is 58.3% for every generator (= skeleton edges / target edges, skeleton kept verbatim) and is no
+longer reported. The discriminative metrics are attach recall/precision and degree EMD: AR-GNN ≈ 1.75× the precision of the
+rule methods; best-of-16 recovers outline pass rate (0.943 > ground truth) at no structural cost. Single-anchor loss is the
+component that matters most (precision 71→55, EMD ×2); growth order mainly moves validation accuracy, not final structure;
+the planarity guard is a safety valve (no measurable change). R09–R14 and thesis §3 now use these numbers.
+
+**Bug fixed before the rerun:** `run_real_data_round5.sh` checked `$?` after an `&& … || true` chain (always 0) so the v2
+checkpoint was never retrained; `train_stage2.py` now compares the cached `meta.json` `feat_version` with the code.

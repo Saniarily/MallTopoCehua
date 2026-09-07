@@ -55,6 +55,8 @@ palette:
     stage2_ar_gnn_bfs_order: "#CC79A7"
     stage2_ar_gnn_single_label: "#D55E00"
     stage2_ar_gnn_basic_feats: "#F0E442"
+    stage2_ar_gnn_greedy_order: "#999933"
+    stage2_ar_gnn_no_planar: "#009E73"
 
 # 中文显示名（图例、坐标轴、表格）。键 = 代码中的名字。改这里即可改图中文字。
 labels:
@@ -81,6 +83,8 @@ labels:
     stage2_ar_gnn_bfs_order: "消融：改用广度优先生长顺序"
     stage2_ar_gnn_single_label: "消融：只认单一正确接点"
     stage2_ar_gnn_basic_feats: "消融：去掉结构特征"
+    stage2_ar_gnn_greedy_order: "消融：改用贪心生长顺序"
+    stage2_ar_gnn_no_planar: "消融：关闭平面性约束"
     ar_gnn_v1: "第一版（广度优先 + 单接点 + 基础特征）"
     ref_random: "随机推荐"
     ref_majority: "永远推荐最常见类型"
