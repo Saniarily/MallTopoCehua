@@ -559,13 +559,36 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     if svc is None:
         return []
     s = load_style()
+    we = s.get("worked_example") or {}
+    pin = we.get("prototype_floor")
     # ---- Stage 1 -----------------------------------------------------------------------------------------------
     df = db.cases
-    med = df[df["city_cluster"] == 2][db.query_cols].median() if (df["city_cluster"] == 2).any() else df[db.query_cols].median()
-    q = PlanningCondition(city_cluster=2, **{c: float(med[c]) for c in db.query_cols})
+    pin_row = df[df[db.id_col] == pin] if pin else df.iloc[0:0]
+    if not pin_row.empty and db.get_graph(pin) is not None:
+        # query = the pinned floor's own mall conditions, so that the retrieval legitimately returns that prototype
+        r0 = pin_row.iloc[0]
+        med = r0[db.query_cols].astype(float)
+        cl = int(r0["city_cluster"]) if pd.notna(r0.get("city_cluster")) else 2
+    else:
+        pin = None
+        cl = 2
+        med = df[df["city_cluster"] == cl][db.query_cols].median() if (df["city_cluster"] == cl).any() else df[db.query_cols].median()
+    q = PlanningCondition(city_cluster=cl, **{c: float(med[c]) for c in db.query_cols})
     types = svc.recommend_types(q)
     top_type = types.recommendations[0].layout_type if types and types.recommendations else None
+    if pin and "layout_type" in df and pd.notna(pin_row.iloc[0].get("layout_type")):
+        top_type = str(pin_row.iloc[0]["layout_type"])  # the designer picks the pinned floor's type
     recs = svc.recommend_within_type(q, top_type, top_k=3) if top_type else svc.recommend(q, top_k=3, with_counterfactuals=False)
+    if pin:
+        # make the pinned floor the designer's #1 (it is in the same type; if the ranker did not list it, put it first)
+        recs = [r for r in recs if r.prototype_id == pin] + [r for r in recs if r.prototype_id != pin]
+        if not recs or recs[0].prototype_id != pin:
+            from mall_space_planner.schemas import Recommendation
+
+            qs = pin_row.iloc[0].get("total_score")
+            stub = Recommendation(rank=1, prototype_id=pin, score=float("nan"), quality_score=float(qs) if pd.notna(qs) else None, similarity=None)
+            recs = [stub, *recs[:2]]
+        recs = [r.model_copy(update={"rank": i + 1}) for i, r in enumerate(recs)]
     proto = recs[0]
     mall_id, _ = split_floor_id(proto.prototype_id)
     row = df[df[db.id_col] == proto.prototype_id]
@@ -573,56 +596,31 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     if not row.empty and "total_area" in row and pd.notna(row.iloc[0]["total_area"]):
         n_fl = int((df["mall_id"] == mall_id).sum()) if "mall_id" in df else 1
         area_hint = float(row.iloc[0]["total_area"]) / max(n_fl, 1)
-    # ---- Stage 2 (+ real reference) -----------------------------------------------------------------------------
+    # ---- Stage 2 + Stage 3 = renovation workflow on the prototype floor ------------------------------------------
+    # Most projects are refurbishments: keep the outline, the main corridors (skeleton, anchored at their real positions)
+    # and the entrances; regrow the secondary network with the Stage-2 generator; render the corridor plan; compare the
+    # topology indicators of the existing and the renewed network.
+    from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, renovate_floor
+
     ds, paths, real_full, used_fid, cand_fids, own_fid = _stage3_context(results, proto.prototype_id, mall_id, area_hint)
     demo_floor = used_fid != proto.prototype_id
-    if demo_floor:  # sandbox: skeleton of the bundled sample floor
-        from mall_space_planner.data.legacy_adapter import load_graph_csv
-
-        sk = load_graph_csv(paths.graph_dir / f"{used_fid}_M_simplified.csv", paths.graph_dir / f"{used_fid}_M_simplified_node_attributes.csv")
-    else:
-        sk = db.get_graph(proto.prototype_id)
-    rule, search, ar = _generators(results)
-    gen = ar or search
-    gen_name = "自回归图网络 + 16 次择优（本文）" if ar else "规则 + 16 次择优（无 AR-GNN 检查点时的替代）"
-    n_t = real_full.num_nodes if real_full is not None else max(int(sk.num_nodes * 1.8), sk.num_nodes + 8)
-    req = GenerationRequest(prototype=TopologyPrototype(prototype_id=used_fid, graph=sk, layout_type=proto.layout_type if hasattr(proto, "layout_type") else None), boundary=SiteBoundary.rectangle(100, 100), constraints=ConstraintSet(target_num_nodes=n_t), seed=0)
-    g_gen = gen.generate(req, 0)
-    ap = attachment_overlap(sk, real_full, g_gen)[1] if real_full is not None else None
-    sk_nodes = set(sk.nodes)
-    sk_pos = skeleton_layout(to_networkx(sk), seed=0)
-    G_gen = to_networkx(g_gen)
-    p_gen = full_layout(G_gen, sk_nodes, sk_pos, seed=0)
-    G_real = to_networkx(real_full) if real_full is not None else None
-    p_real = full_layout(G_real, sk_nodes, sk_pos, seed=0) if G_real is not None else None
-    frame2 = frame_of(sk_pos, p_gen, *( [p_real] if p_real else []))
-    # ---- Stage 3 -----------------------------------------------------------------------------------------------
-    outlines: list[tuple[str, object]] = []
-    for c in cand_fids:
-        try:
-            outlines.append((f"真实楼层 {c}", ds.outline(c)))
-        except Exception:  # noqa: BLE001
-            pass
-    if not outlines and own_fid:
-        try:
-            outlines.append((f"真实楼层 {own_fid}", ds.outline(own_fid)))
-        except Exception:  # noqa: BLE001
-            pass
-    # hand-drawn option, sized to the target area
-    A = (outlines[0][1].area if outlines else (area_hint or 15000.0))
-    kx = float(np.sqrt(A / (160 * 110 - 60 * 50)))
-    hand = outline_from_points([(0, 0), (160 * kx, 0), (160 * kx, 60 * kx), (100 * kx, 60 * kx), (100 * kx, 110 * kx), (0, 110 * kx)])
-    outlines.append(("设计师手绘轮廓", hand))
-    chosen_i = 0
-    outline = outlines[chosen_i][1]
+    if real_full is None or paths.graph_dir is None:
+        return []
+    gen, gen_name = build_generator(results)
     fitter = CorridorFitter(FitParams(n_restarts=4, iters=100))
-    res = fitter.fit(g_gen, outline, seed=0, skeleton_nodes=sk_nodes)
-    plan = render_corridors(g_gen, res.positions, outline, res.roles, RenderParams(), skeleton_nodes=sk_nodes)
-    d3 = plan.diagnostics
+    rv = renovate_floor(used_fid, paths.graph_dir, ds, gen, fitter, RenderParams(), seed=int(we.get("seed", 0)), n_candidates=6)
+    sk = rv["skeleton"]
+    sk_nodes = rv["sk_nodes"]
+    g_gen, real_full = rv["after"], rv["before"]
+    n_t = real_full.num_nodes
+    ap = attachment_overlap(sk, real_full, g_gen)[1]
+    G_gen, G_real = to_networkx(g_gen), to_networkx(real_full)
+    outline, res, plan, d3 = rv["outline"], rv["res"], rv["plan"], rv["plan"].diagnostics
+    gt_pos = rv["gt"]
 
     # ---- figure --------------------------------------------------------------------------------------------------
-    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, 11.0))
-    gs = f.add_gridspec(6, 12, height_ratios=[1.0, 0.14, 1.05, 0.14, 1.35, 0.02], hspace=0.30, wspace=0.5, left=0.04, right=0.98, top=0.94, bottom=0.06)
+    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.25, 9.0))
+    gs = f.add_gridspec(6, 12, height_ratios=[1.0, 0.30, 1.75, 0.10, 0.22, 0.02], hspace=0.30, wspace=0.5, left=0.03, right=0.98, top=0.94, bottom=0.07)
     # (a) conditions
     ax = f.add_subplot(gs[0, 0:3])
     ax.axis("off")
@@ -667,42 +665,33 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
                 sp.set_visible(True); sp.set_edgecolor(s["palette"]["highlight"]); sp.set_linewidth(1.4)
     # captions (dedicated spacer rows)
     for row_i, txt in ((1, f"(c) 上排右侧：阶段一 ②–④ 「{top_type}」内检索到的 Top-3 可比案例原型（红框 = 设计师选定的 #1）　　"
-                           f"(d) 阶段二 ⑤：以 #1 为骨架扩展为完整走廊关键点网络（{n_t} 单元），右侧为**同一楼层真实建成**的完整网络作对照"
-                           + ("（沙箱示意：改用样例层 " + used_fid + "）" if demo_floor else "")),
-                       (3, f"(e) 阶段三 ⑥–⑧：选外轮廓（面积相近的真实楼层 / 手绘）→ 网络自适应嵌入（外环沿立面内侧、支路垂直、无交叉）→ 一键成廊（主/次廊、{d3['n_entrances']} 出入口、{d3['n_atria']} 中庭；商铺分区留给设计师）")):
+                           f"(d) 阶段二 + 阶段三（改造工作流）：楼层 {used_fid}，同一轮廓、保留主走廊与出入口，重新生长次级网络（{n_t} 单元）并一键成廊；右侧为现状 vs 更新的拓扑指标"
+                           + ("（沙箱示意：改用样例层）" if demo_floor else "")),
+                       (3, "(e) 阅读方式与图例")):
         cap = f.add_subplot(gs[row_i, :])
         cap.axis("off")
-        cap.text(0, 0.0, txt.replace("**", ""), ha="left", va="bottom", transform=cap.transAxes, fontsize=s["fonts"]["size_label"], fontweight="bold")
-    # (d) skeleton | generated | real
-    panels = [(to_networkx(sk), sk_pos, f"骨架 = 原型 #1\n{sk.num_nodes} 单元 / {len(sk.edges())} 连接"),
-              (G_gen, p_gen, f"{gen_name}\n{g_gen.num_nodes} 单元 / {G_gen.number_of_edges()} 连接" + (f" · 分支位置正确率 {ap:.0f}%" if ap is not None else ""))]
-    if G_real is not None:
-        panels.append((G_real, p_real, f"真实建成（同一楼层，作对照）\n{real_full.num_nodes} 单元 / {G_real.number_of_edges()} 连接"))
-    for k, (G, pos, ttl) in enumerate(panels):
-        ax = f.add_subplot(gs[2, 4 * k : 4 * k + 4])
-        draw_topology(ax, G, sk_nodes, pos=pos, title=ttl, seed=0, size_ref_n=n_t, frame=frame2, node_scale=0.9)
-    # (e) outlines | fit | corridors
-    ax = f.add_subplot(gs[4, 0:4])
-    ax.axis("off")
-    ax.set_title("① 选择外轮廓（红 = 选定）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
-    n_o = len(outlines)
-    for j, (name, o) in enumerate(outlines):
-        sub = ax.inset_axes([j / n_o + 0.02, 0.05, 1 / n_o - 0.04, 0.85])
-        _draw_shapely(sub, o.polygon, fc="#f4f4f4", ec=s["palette"]["highlight"] if j == chosen_i else "#555", lw=1.6 if j == chosen_i else 0.8)
-        sub.set_aspect("equal"); sub.autoscale(); sub.axis("off")
-        sub.set_title(f"{name}\n{o.area / 1e4:.1f} 万 m²" + ("  ✓" if j == chosen_i else ""), fontsize=s["fonts"]["size_annot"] - 1, color=s["palette"]["highlight"] if j == chosen_i else "#333")
-    ax = f.add_subplot(gs[4, 4:8])
-    _draw_shapely(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
-    _draw_shapely(ax, res.inset, fc="none", ec="#bbb", lw=0.6)
-    P = res.positions
-    for u, v in G_gen.edges:
-        main = plan.edge_class.get((u, v), plan.edge_class.get((v, u))) == "main"
-        ax.plot([P[u][0], P[v][0]], [P[u][1], P[v][1]], color="#D9480F" if main else "#e8a37a", lw=1.3 if main else 0.8)
-    ax.scatter([P[v][0] for v in G_gen.nodes], [P[v][1] for v in G_gen.nodes], s=14, c=["#2B2B2B" if v in sk_nodes else "white" for v in G_gen.nodes], zorder=5, edgecolors=["#2B2B2B" if v in sk_nodes else s["palette"]["ours"] for v in G_gen.nodes], linewidths=0.8)
-    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
-    ev_txt = f"交叉 {res.diagnostics.get('crossings', 0)} · 正交偏差 {res.diagnostics.get('ortho_deviation_deg', 0):.0f}°"
-    ax.set_title(f"② 关键点网络嵌入轮廓\n{ev_txt}", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
-    ax = f.add_subplot(gs[4, 8:12])
+        cap.text(0, 1.0, txt.replace("**", ""), ha="left", va="top", transform=cap.transAxes, fontsize=s["fonts"]["size_label"], fontweight="bold")
+    # (d) existing network | renewed network (same outline, skeleton anchored) | corridor plan | indicator table
+    def _net(ax, G, pos, ttl):  # noqa: ANN001, ANN202
+        _draw_shapely(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
+        for u, v in G.edges:
+            if u in pos and v in pos:
+                main = u in sk_nodes and v in sk_nodes
+                ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]], color="#D9480F" if main else "#e8a37a", lw=1.4 if main else 0.8, zorder=3)
+        nodes = [v for v in G.nodes if v in pos]
+        ax.scatter([pos[v][0] for v in nodes], [pos[v][1] for v in nodes], s=14, c=["#2B2B2B" if v in sk_nodes else "white" for v in nodes], zorder=5,
+                   edgecolors=["#2B2B2B" if v in sk_nodes else s["palette"]["ours"] for v in nodes], linewidths=0.8)
+        ax.set_aspect("equal"); ax.autoscale(); ax.axis("off"); ax.set_anchor("S")
+        ax.set_title(ttl, loc="left", fontsize=s["fonts"]["size_annot"] + 0.5, pad=2)
+
+    ib, ia = rv["ind_b"], rv["ind_a"]
+    gs_d = gs[2, :].subgridspec(1, 4, width_ratios=[1, 1, 1, 1.1], wspace=0.05)
+    ax = f.add_subplot(gs_d[0, 0])
+    _net(ax, G_real, {k: np.asarray(v) for k, v in gt_pos.items()}, f"① 现状：真实建成网络\n{ib['num_nodes']} 单元 · {ib['num_cycles']} 回路\n步行路径 {ib['avg_shortest_path']:.2f}")
+    ax = f.add_subplot(gs_d[0, 1])
+    P = {k: np.asarray(v) for k, v in res.positions.items()}
+    _net(ax, G_gen, P, f"② 更新：{gen_name.split('（')[0]}\n{ia['num_nodes']} 单元 · {ia['num_cycles']} 回路\n步行路径 {ia['avg_shortest_path']:.2f} · 分支正确率 {ap:.0f}%")
+    ax = f.add_subplot(gs_d[0, 2])
     _draw_shapely(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
     _draw_shapely(ax, plan.corridors_secondary, fc="#F7DDB0", ec="#b07a2a", lw=0.4)
     _draw_shapely(ax, plan.corridors_main, fc="#F0C987", ec="#b07a2a", lw=0.5)
@@ -711,11 +700,42 @@ def f09_worked_example(results: Path, out: Path) -> list[Path]:
     for e in plan.entrances:
         _draw_shapely(ax, e["stub"], fc="#F0C987", ec="#b07a2a", lw=0.4)
         ax.scatter([e["point"][0]], [e["point"][1]], marker="v", s=55, c="#D9480F", zorder=6)
-    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
-    wtxt = f"主廊 {d3['main_width_m']:.0f} m / 次廊 {d3['secondary_width_m']:.0f} m" if d3['main_width_m'] != d3['secondary_width_m'] else f"廊宽 {d3['main_width_m']:.0f} m"
-    ax.set_title(f"③ 一键成廊：{wtxt}\n走廊占比 {d3['corridor_ratio'] * 100:.0f}%（真实中位 19%）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
-    f.legend(handles=legend_handles() + [Patch(facecolor="#F0C987", edgecolor="#b07a2a", label="主走廊"), Patch(facecolor="#F7DDB0", edgecolor="#b07a2a", label="次走廊"), Patch(facecolor="#B5E7A0", edgecolor="#5a9a4a", label="中庭（环路围合的洞）"), plt.Line2D([], [], marker="v", color="#D9480F", ls="", ms=7, label="出入口")],
-             loc="lower center", ncol=6, bbox_to_anchor=(0.5, 0.0), fontsize=s["fonts"]["size_annot"])
+    for vc in getattr(plan, "vertical_cores", []):
+        _draw_shapely(ax, vc["polygon"], fc="#9e9e9e", ec="#555", lw=0.5)
+    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off"); ax.set_anchor("S")
+    wtxt = f"主廊 {d3['main_width_m']:.0f} m / 次廊 {d3['secondary_width_m']:.0f} m"
+    ax.set_title(f"③ 一键成廊：{wtxt}\n{d3['n_entrances']} 出入口 · {d3['n_vertical_cores']} 竖向核 · {d3['n_atria']} 中庭\n走廊占比 {d3['corridor_ratio'] * 100:.0f}%", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5, pad=2)
+    ax = f.add_subplot(gs_d[0, 3]); ax.axis("off")
+    rows_t = []
+    for k in ["num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "n_dead_ends"]:
+        b, a_ = ib.get(k), ia.get(k)
+        if b is None or a_ is None:
+            continue
+        better = BETTER.get(k, 0)
+        arrow = "" if better == 0 or abs(a_ - b) < 1e-9 else ("▲" if (a_ - b) * better > 0 else "▼")
+        rows_t.append([TOPO_LABEL[k], f"{b:.2f}" if isinstance(b, float) else str(b), f"{a_:.2f}" if isinstance(a_, float) else str(a_), arrow])
+    rr = rv["row"]
+    if rr.get("before_sharp_angle_rate") is not None:
+        b, a_ = rr["before_sharp_angle_rate"], rr["after_sharp_angle_rate"]
+        rows_t.append(["锐角(<60°)比例", f"{b:.2f}", f"{a_:.2f}", "" if abs(a_ - b) < 1e-9 else ("▲" if a_ < b else "▼")])
+    tbl = ax.table(cellText=rows_t, colLabels=["拓扑指标", "现状", "更新", ""], loc="center", cellLoc="center", colWidths=[0.56, 0.17, 0.17, 0.10], bbox=[0.02, 0.15, 0.96, 0.7])
+    tbl.auto_set_font_size(False); tbl.set_fontsize(s["fonts"]["size_annot"])
+    for (i, j), c in tbl.get_celld().items():
+        c.set_edgecolor("#bbb")
+        if i == 0:
+            c.set_text_props(fontweight="bold")
+        if j == 3 and i > 0:
+            c.set_text_props(color="#2e7d32" if rows_t[i - 1][3] == "▲" else ("#c62828" if rows_t[i - 1][3] == "▼" else "#333"))
+    ax.set_title("④ 关键拓扑指标\n现状 vs 更新（▲ = 改善）", loc="left", fontsize=s["fonts"]["size_annot"] + 0.5)
+    # (e) how to read
+    ax = f.add_subplot(gs[4, :])
+    ax.axis("off")
+    ax.text(0, 1.0, "阅读方式：① 现状 = 数据库中该楼层真实建成的完整走廊关键点网络（黑点 = 阶段一原型 / 主走廊节点，改造中原位保留）；② 以原型为骨架、按现状规模与密度重新生长次级网络（阶段二），并在同一轮廓内以保留节点为锚点嵌入（阶段三）；\n"
+                    "③ 骨架边渲染为主走廊、新边为次走廊；原有断头节点优先成为出入口，内部断头成为竖向交通核，环路围合的紧凑空洞成为中庭；商铺分区留给设计师；\n"
+                    "④ ▲ = 相对现状的改善方向：回路更多、步行路径更短、整合度（接近中心性）更高、介数更分散、断头更少、锐角更少。",
+            ha="left", va="top", wrap=True, fontsize=s["fonts"]["size_annot"], color="#333", transform=ax.transAxes)
+    f.legend(handles=legend_handles() + [Patch(facecolor="#F0C987", edgecolor="#b07a2a", label="主走廊"), Patch(facecolor="#F7DDB0", edgecolor="#b07a2a", label="次走廊"), Patch(facecolor="#B5E7A0", edgecolor="#5a9a4a", label="中庭（环路围合的洞）"), plt.Line2D([], [], marker="v", color="#D9480F", ls="", ms=7, label="出入口"), Patch(facecolor="#9e9e9e", edgecolor="#555", label="竖向交通核（内部断头处）")],
+             loc="lower center", ncol=7, bbox_to_anchor=(0.5, 0.0), fontsize=s["fonts"]["size_annot"])
     f.suptitle(title_for("F09") + ("" if is_real else "（合成数据演示；本机运行时自动使用真实案例库）"), x=0.02, ha="left", fontweight="bold")
     return savefig(f, out, "F09_worked_example")
 

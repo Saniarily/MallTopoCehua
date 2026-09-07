@@ -119,6 +119,9 @@ class RuleBasedExpander(BaseTopologyGenerator):
         layout = request.constraints.layout_type or request.prototype.layout_type
         probs = self._ops(layout).normalised()
         ref_deg = self._avg_degree(g)
+        tm = request.constraints.target_metrics
+        if tm is not None and tm.avg_degree:  # renovation / explicit target: track the requested density instead of the skeleton's
+            ref_deg = float(tm.avg_degree)
         sk_nodes = set(skeleton.nodes)
 
         def _try_add(w: str, anchors: list[str]) -> bool:

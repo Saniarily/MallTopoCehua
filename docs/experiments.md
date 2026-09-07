@@ -215,3 +215,21 @@ the sample floor: real network 8% of node angles < 45°, 13.5% < 60°; fitted 34
 post-pass `open_angles` (min 60°), `sharp_angle_rate` in the fit score (fitted now 11–16% < 45°), renderer buffers the
 merged centre-lines with round joins, morphological closing (r = w/2), kiosk-size holes filled, atria must be compact
 (aspect ≤ 4, min side ≥ 1.5 w) and never overlap corridors. Re-run of the 200-floor evaluation pending.
+
+### Stage 3 v2 (Mac, 2026-09-07; 200 test floors, 5 skipped > 120 nodes) — after angle / hierarchy / dead-end rules
+| protocol | n | planar | all inside | ortho dev | sharp (<60°) | corridor ratio (real) | entrances | vertical cores | dead ends | atria | chamfer vs random | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| self | 195 | 92.3% | 100% | 8.4° (median 8.5°) | 0.17 | 0.19 (0.17) | 2.5 | 4.5 | 5.0 | 2.2 | 21.2 m vs 29.7 m (ratio 0.65; better in 92.8%) | 1.8 |
+| transfer | 195 | 94.4% | 100% | 9.1° | 0.17 | 0.20 (0.20) | 2.6 | 4.4 | 5.0 | 2.2 | – | – |
+
+Compared with v1: chamfer ratio to random 0.71 → **0.65**, better-than-random 90% → **92.8%**, sharp-angle rate now measured (0.17,
+real ≈ 0.135); entrances fell 4.0 → 2.5 because dead ends deep inside became vertical cores (4.5 / floor) — the fitted networks
+place too many dead ends inside. Fixes in the following commit: leaf-to-façade force (`w_leaf_facade`), entrance target
+≈ façade length / 100 m with farthest-point spread, atrium selection over all faces with spread. Ortho deviation rose 5.9° → 8.4°
+(angle opening trades a little orthogonality for no wedges).
+
+### Stage 3 — renovation workflow (`scripts/renovate_stage3.py`) — **待运行 (Mac)**
+Same outline, skeleton anchored at real positions, secondary network regrown, before / after topology indicators.
+Fixture floor B000A0E928_1 (rule best-of-16 in the sandbox; AR-GNN on the Mac): cycles 34 → 24, ASPL 5.72 → 5.34, diameter 15 → 12,
+closeness 0.18 → 0.19, max betweenness 0.34 → 0.50, dead ends 0 → 4 (→ vertical cores), crossings 0, 6 entrances, 2 atria.
+Run on the low-score test malls: `python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.3 --limit 40 --out outputs/experiments/renovation`.

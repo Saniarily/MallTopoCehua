@@ -24,6 +24,13 @@ figure:
   errorbar_capsize: 3
   savefig_pad: 0.05
 
+# F09 worked example: pin the prototype floor so the end-to-end figure uses a case whose Stage-3 result was verified by
+# the designer (B000A0E928_1: 25-node skeleton -> 50-node real network). null = let Stage 1 pick the top-1 prototype.
+worked_example:
+  prototype_floor: "B000A0E928_1"
+  outline: "hand_L"         # "hand_L" = designer L-shaped outline (area-matched) | "own" = the floor's own outline | "similar" = closest-area real floor of another mall
+  seed: 0
+
 palette:
   # 类别色（Okabe–Ito 无障碍配色为基础，略调深）
   main: ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#999999"]

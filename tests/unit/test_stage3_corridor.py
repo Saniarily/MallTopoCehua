@@ -140,3 +140,23 @@ def test_outline_from_mask_png(tmp_path) -> None:  # noqa: ANN001
     Image.fromarray(255 - img).save(p)
     o2 = outline_from_mask(p)
     assert abs(o2.area - o.area) / o.area < 0.03
+
+
+def test_renovation_mode_anchors_skeleton_and_regrows():
+    """Renovation: same outline, skeleton nodes anchored at their real positions, secondary network regrown."""
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+    from mall_space_planner.stage3.renovate import build_generator, renovate_floor
+
+    fix = Path("tests/fixtures/graph_csv")
+    ds = Stage3Dataset(Stage3Paths(graph_dir=fix))
+    gen, _ = build_generator(None)
+    r = renovate_floor("B000A0E928_1", fix, ds, gen, CorridorFitter(FitParams(n_restarts=2, iters=40)), RenderParams(), seed=0, n_candidates=2)
+    assert r["after"].num_nodes == r["before"].num_nodes
+    # anchored skeleton nodes did not move
+    for v in r["sk_nodes"]:
+        assert np.allclose(r["res"].positions[v], r["gt"][v], atol=1e-6)
+    assert r["row"]["after_crossings"] == 0
+    assert r["row"]["after_inside_ratio"] == 1.0
+    assert r["plan"].diagnostics["n_entrances"] >= 2
+    assert r["plan"].diagnostics["main_width_m"] > r["plan"].diagnostics["secondary_width_m"]
+    assert all(k in r["ind_a"] for k in ("num_cycles", "avg_shortest_path", "closeness_mean", "n_dead_ends"))
