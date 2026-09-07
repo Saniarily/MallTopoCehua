@@ -36,11 +36,8 @@ python scripts/calibrate_stage2_thresholds.py --gt "$S2_OUT/ref_ground_truth/per
 TH="$(cat configs/stage2/thresholds_v2.local.yaml.override)"
 ev() { local CFG=$1 SEED=$2; shift 2; python scripts/evaluate_stage2.py --config "configs/stage2/$CFG.yaml" --corpus "$CORPUS" --limit "$LIMIT" --seed "$SEED" "$@" --override "eval_output_dir=$S2_OUT" $TH || echo "!! $CFG seed $SEED failed"; }
 ev rule_baseline 0 --ground-truth --force
-[[ -f outputs/checkpoints/stage2/stage2_ar_gnn/ar_gnn.pt ]] && python - <<'PY' || true
-import json, sys; m = json.load(open("outputs/checkpoints/stage2/stage2_ar_gnn/meta.json"))
-sys.exit(0 if m.get("feat_version") == 3 else 1)
-PY
-if [[ $? -ne 0 || ! -f outputs/checkpoints/stage2/stage2_ar_gnn/ar_gnn.pt ]]; then tr ar_gnn; fi
+# train_stage2.py itself retrains when the cached checkpoint's feat_version != current FEAT_VERSION (v2 checkpoints are stale)
+tr ar_gnn
 for S in $SEEDS; do
   ev rule_baseline "$S"; ev search_baseline "$S"
   for CFG in ar_gnn ar_gnn_greedy ar_gnn_bestof16; do ev "$CFG" "$S" --override "stage2.generator.params.device=$DEVICE"; done
@@ -59,4 +56,10 @@ python scripts/aggregate_stage2.py --root "$S2_OUT"
 echo "== [D] thesis figures (uses corpus v2 test split + planar_corridor decoder) =="
 mkdir -p data/results_snapshot/stage2 && cp -f "$S2_OUT"/table.md "$S2_OUT"/summary.csv data/results_snapshot/stage2/ 2>/dev/null || true
 python scripts/make_thesis_report.py || echo "!! figures failed"
-echo "== report back: $S2_OUT/table.md, ${CORPUS%.jsonl}.stats.json, outputs/checkpoints/stage2/*/meta.json, outputs/thesis/figures/{F06,F06b,F07,F09}*.png =="
+echo "== report back (paste/attach): =="
+echo "  1. $S2_OUT/table.md  and  $S2_OUT/summary.csv          (aggregated results, all generators x seeds)"
+echo "  2. ${CORPUS%.jsonl}.stats.json                             (corpus build stats)"
+echo "  3. outputs/checkpoints/stage2/*/meta.json                  (training curves, feat_version must be 3)"
+echo "  4. configs/stage2/thresholds_v2.local.yaml                 (calibrated thresholds)"
+echo "  5. outputs/thesis/figures/{F06,F06b,F07,F09}*.png          (regenerated figures)"
+echo "  6. any line starting with '!!' in the console log"

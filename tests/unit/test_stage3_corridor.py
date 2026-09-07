@@ -89,3 +89,25 @@ def test_corridor_only_decoder_and_service_api(real) -> None:  # noqa: ANN001
     assert len(layout.skeleton_positions) == topo.num_nodes
     assert layout.diagnostics["crossings"] == 0 and layout.diagnostics["n_entrances"] >= 1
     assert all(u.kind in {"corridor", "atrium", "entrance"} for u in layout.units)
+
+
+def test_stage3_dataset_csv_and_outline_loader(tmp_path) -> None:  # noqa: ANN001
+    import yaml
+
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+
+    cfg = {"dataset": {"params": {"graph_dir": str(FIX)}}, "stage3": {"dataset_csv": str(FIX / "dataset_0_sample.csv"), "m_per_px": 0.5, "outline_close_px": 20}}
+    (tmp_path / "c.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    ds = Stage3Dataset(Stage3Paths.from_config(cfg))
+    recs = ds.regions("B000A0E928_1")
+    assert len(recs) == 1 and recs[0].region == 0 and recs[0].area_total_px == 67568.0
+    assert abs(recs[0].corridor_ratio - 14938 / 67568) < 1e-9
+    st = ds.corridor_ratio_stats()
+    assert st["n"] > 0 and 0.05 < st["median"] < 0.4
+    o = ds.outline("B000A0E928_1")  # no mask dir configured -> *_total.csv polygons
+    assert o.polygon.is_valid and o.extra["real_corridor_ratio"] > 0 and o.scale_source == "default"
+    # pixel scale from a mall-level m² area spread over its floors
+    mpp, src = ds.m_per_px_for("B000A0E928_1", mall_area_m2=3 * 67568 * 0.25, n_floors=3)
+    assert src == "main_table_area" and abs(mpp - 0.5) < 1e-9
+    sims = ds.similar_outlines(67568 * 0.25, k=3, exclude_mall="B000A0E928")
+    assert sims and all(not s.startswith("B000A0E928") for s in sims)
