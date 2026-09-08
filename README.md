@@ -47,21 +47,28 @@ bash scripts/run_real_data_round4.sh
 # 论文全部图表（PNG/PDF/SVG，中文字体自动探测；样式与中文标签在 configs/thesis/style.yaml）
 python scripts/make_thesis_report.py                 # → outputs/thesis/figures/ ；报告正文见 docs/thesis/thesis_report.md
 python scripts/make_thesis_report.py --only R05 R09  # 只重生成指定图
+# 阶段三改造流程（同轮廓、只固定出入口、重新生长并重排；前后拓扑指标 + 阶段一预测评分）
+python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.5 --limit 40 --out outputs/experiments/renovation_v2
+# Phase 5 Viewer Hub：pip install -e ".[app]" 后
+streamlit run apps/viewer_hub/Home.py                                   # 三个界面（数据浏览 / 训练与实验中心 / 策划验证 + 改造，一键重新生成）
+PYTHONPATH=src uvicorn mall_space_planner.hub.api:app --port 8000      # 可选 REST 后端（同一套 hub 对象）
 ```
 
 ## 目录
-`configs/` 数据/阶段/消融配置 · `src/mall_space_planner/` {schemas, data, features, topology, geometry, stage1, stage2, evaluation, registry, utils} ·
-`scripts/` CLI · `tests/` unit+smoke · `docs/` 审计/Schema/架构 · `data/samples/` 合成样例（自动生成）。
+`configs/` 数据/阶段/消融配置 · `src/mall_space_planner/` {schemas, data, features, topology, geometry, stage1, stage2, stage3, hub, evaluation, registry, utils} ·
+`apps/viewer_hub/` Streamlit 界面 · `scripts/` CLI · `tests/` unit+smoke · `docs/` 审计/Schema/架构/`viewer_hub.md` · `data/samples/` 合成样例（自动生成）。
 
 ## 机器相关路径
 复制 `configs/data/legacy.local.yaml.example` → `legacy.local.yaml`（git 忽略）填写本机路径；任何 `<cfg>.local.yaml` 都会自动覆盖同名配置。
 
-## 状态（Phase 0–4 代码完成；Phase 4 真实数据待运行）
+## 状态（Phase 0–5 代码完成）
 - ✅ 审计 / Schema / registry / 适配器（含真实 97 列表的 18 个额外拓扑列与 `type8` 布局类型）/ 无泄漏划分
 - ✅ 阶段一：**类型条件化质量模型** E[score | 条件, 类型]（`recommend_types → recommend_within_type`）+ 硬约束过滤 + kNN 召回 + 10 种 ranker（经典 / LTR / 上下界参照 / **deep_residual** Transformer+GIN 残差融合）+ 解释 + 反事实 + 多 seed 消融
 - ✅ 阶段二：rule / search / **ar_gnn**（自回归 GNN，原型结构性保持）扩展器 + 几何解码 + 修复器 + 拓扑&几何双评估 + JSON/GeoJSON/SVG/PNG
 - ✅ 原型保真度协议、真实数据第 1–2 轮结果（`docs/experiments.md`）；36 个测试通过
 - ✅ 第 3 轮真实实验完成：deep_residual 与经典持平（残差结构是关键成分）；类型模型 best-type 一致率 100%、policy uplift +0.056；**AR-GNN v2 在结构指标上明显超过规则/搜索**（attach precision 79.7 vs 43.2）——见 `docs/experiments.md`
-- ⏳ 待实现（Phase 5）：Streamlit Viewer Hub（数据浏览 / 实验看板 / 策划工作台）、FastAPI、学习型校准器、MLflow（可选）
+- ✅ 阶段三走廊自适应（Tutte + 中轴松弛 + 平面修复；出入口 / 竖向核 / 中庭）与**旧商场改造流程**（只固定出入口、重新生长并重排、前后指标 + 预测评分）
+- ✅ **Phase 5 Viewer Hub**：`hub/`（Catalog / Workbench / ExperimentRegistry / JobRunner / FastAPI）+ Streamlit 三界面（数据浏览、后台训练与实验中心、策划验证 + 改造，**每个候选一键重新生成**）—— 任务清单与校验见 `docs/viewer_hub.md`
+- ⏳ 待做：React 前端、学习型校准器、MLflow（可选）
 - ✅ 第 4 轮：阶段二 3 seeds + AR-GNN 三项消融 + 大模型；**全部实验完成**。论文报告：`docs/thesis/thesis_report.md`（21 张图 `docs/thesis/figures/`）
 详见 `docs/methodology.md`、`docs/innovation_points.md`、`docs/experiments.md`。

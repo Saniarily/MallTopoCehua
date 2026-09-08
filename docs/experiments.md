@@ -233,3 +233,17 @@ Same outline, skeleton anchored at real positions, secondary network regrown, be
 Fixture floor B000A0E928_1 (rule best-of-16 in the sandbox; AR-GNN on the Mac): cycles 34 → 24, ASPL 5.72 → 5.34, diameter 15 → 12,
 closeness 0.18 → 0.19, max betweenness 0.34 → 0.50, dead ends 0 → 4 (→ vertical cores), crossings 0, 6 entrances, 2 atria.
 Run on the low-score test malls: `python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.3 --limit 40 --out outputs/experiments/renovation`.
+
+### Stage 3 v3 (Mac, 2026-09-08; same 200 floors) — entrance spread / atria spread / leaf-to-façade
+| protocol | planar | ortho | sharp | corridor ratio | entrances | vertical cores | atria | chamfer ratio to random (better-than-random) |
+|---|---|---|---|---|---|---|---|---|
+| self | 92.8% | 8.4° | 0.17 | 0.225 | **5.4** (v2 2.5) | 4.1 | 2.0 | **0.64** (92.8%) |
+| transfer | 94.4% | 9.1° | 0.17 | 0.20 | 5.4 | 4.4 | 2.1 | – |
+
+### Renovation v1 (Mac, 2026-09-08; 40 low-score test floors, AR-GNN + 16, all skeleton nodes anchored)
+cycles 7.2 → 5.9 (improved 12.5%), ASPL 3.83 → 3.72 (67.5%), diameter 9.1 → 8.5 (52.5%), closeness (70%), max betweenness (37.5%),
+dead ends 2.8 → 3.2, sharp 0.10 → 0.18, planar 52.5%. Designer review: anchoring **all** skeleton nodes leaves the topology
+almost unchanged, and many selected floors were tiny (6–10 nodes) or without entrances → renovation v2: anchor only the
+existing entrances (dead ends near the façade; fallback = façade-nearest loop nodes), re-lay-out everything else, Stage-1
+predicted score of the topology in the candidate objective, floor filter (≥ 12 nodes, ≥ 6000 m², floors 1–2 with an entrance,
+optional score threshold). **待运行**: `python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.5 --limit 40 --out outputs/experiments/renovation_v2`.

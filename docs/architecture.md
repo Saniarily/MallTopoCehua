@@ -14,4 +14,4 @@ PlanningCondition ─► Stage1Pipeline: HardConstraintFilter → retriever(knn)
 1. **Phase 2**：LightGBM/XGBoost LambdaMART（pairwise/listwise）、MLP ranker、SHAP 解释、多 seed 汇总脚本 `run_ablation.py`/`compare_experiments.py`。
 2. **创新点候选**（均带消融开关）：(a) 原型作为可解释中间态；(b) 手工拓扑指标 + 可学习图表征的**残差融合**（GIN/GraphSAGE 旁路，Late Fusion，baseline = 纯表格）；(c) 双塔条件–原型对比检索 + 质量感知重排；(d) 原型保持的可控图编辑（rule_expander → 学习型 op 策略/条件 VAE），并用大纲 5 指标 + 连通率 + 多样性评估；(e) 反事实解释（已实现雏形）。
 3. **Phase 3**：店铺分区（shapely 走廊缓冲 → 剩余区域 Voronoi/条带划分）、修复器（越界/重叠/断连）、面积约束、PNG 导出。
-4. **Phase 5**：Streamlit Viewer Hub（数据浏览 / 实验中心 / 策划验证），后端逻辑已在 `pipelines` 中与 UI 解耦。
+4. **Phase 5（已完成）**：Viewer Hub。业务逻辑集中在 `mall_space_planner.hub`（`Catalog` / `Workbench` / `ExperimentRegistry` / `JobRunner`），由 Streamlit 页面 `apps/viewer_hub/` 与 FastAPI `hub/api.py` 共用；训练 / 评估 / 消融 / 阶段三评估 / 改造批量实验均以后台子进程运行（状态、日志、曲线、停止、错误日志）。策划验证按当前流程组织：阶段一类型 → 类型内 Top-K → 约束 → 阶段二生成 → **阶段三走廊方案**（不做店铺分区）→ 约束满足 / 预测评分 / 风险 → 每候选**一键重新生成** → 导出；另含**旧商场改造**页（同轮廓、只固定出入口、重新生长与重排、前后指标对比、一键换 seed）。任务清单与校验记录见 `docs/viewer_hub.md`。
