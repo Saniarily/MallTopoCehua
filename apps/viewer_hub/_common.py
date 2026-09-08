@@ -20,11 +20,13 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from mall_space_planner.hub.catalog import Catalog  # noqa: E402
+from mall_space_planner.hub.viz import ensure_style  # noqa: E402
 from mall_space_planner.hub.experiments import ExperimentRegistry  # noqa: E402
 from mall_space_planner.hub.jobs import JobRunner  # noqa: E402
 from mall_space_planner.hub.workbench import Workbench  # noqa: E402
 
 CONFIG_DIR = ROOT / "configs"
+ensure_style()  # CJK font chain for every matplotlib figure in the hub
 
 
 def setup_page(title: str, icon: str = "🏬") -> None:

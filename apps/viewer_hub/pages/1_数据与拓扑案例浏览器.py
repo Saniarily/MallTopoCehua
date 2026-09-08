@@ -105,7 +105,10 @@ with tab_case:
             show_fig(fig)
             al = rn["outline"].extra.get("csv_align")
             if al:
-                st.caption(f"图 CSV → 掩膜像素对齐：{al['mode']}，平移 {al['shift_px']} px，缩放 {al['scale']}，IoU {al['coverage_identity']} → {al['coverage_best']}")
+                st.caption(f"图 CSV → 掩膜像素对齐：{al['mode']}，平移 {al['shift_px']} px，缩放 {al['scale']}，得分 {al.get('score_identity', al.get('coverage_identity'))} → {al.get('score_best', al.get('coverage_best'))}，节点在内 {al.get('nodes_inside_rate', '?')}")
+            fb = rn["outline"].extra.get("outline_fallback")
+            if fb:
+                st.caption(f"掩膜与图 CSV 不属于同一区域（对齐后节点在内 {fb['mask_rate']}），轮廓改由 total.csv 店铺多边形重建（节点在内 {fb['csv_rate']}）")
             from shapely.geometry import Point
             outside = [v for v, pxy in rn["positions"].items() if not rn["outline"].polygon.buffer(1.0).covers(Point(pxy))]
             if outside:
