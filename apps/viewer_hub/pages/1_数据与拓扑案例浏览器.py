@@ -103,6 +103,13 @@ with tab_case:
             sk_nodes = set(rn["skeleton"].nodes) if rn["skeleton"] is not None else set()
             draw_network_in_outline(ax, rn["full"], rn["positions"], rn["outline"], sk_nodes, title=f"{fid}（真实位置）")
             show_fig(fig)
+            al = rn["outline"].extra.get("csv_align")
+            if al:
+                st.caption(f"图 CSV → 掩膜像素对齐：{al['mode']}，平移 {al['shift_px']} px，缩放 {al['scale']}，IoU {al['coverage_identity']} → {al['coverage_best']}")
+            from shapely.geometry import Point
+            outside = [v for v, pxy in rn["positions"].items() if not rn["outline"].polygon.buffer(1.0).covers(Point(pxy))]
+            if outside:
+                st.warning(f"{len(outside)} 个关键点仍在轮廓外（{', '.join(outside[:6])}…）——该楼层的图 CSV 与掩膜可能来自不同区域 / 图幅", icon="⚠️")
         else:
             o = cat.outline(fid)
             if o is None:

@@ -227,28 +227,40 @@ with tab_reno:
                 st.dataframe(tbl, width="stretch", hide_index=True, height=min(360, 40 + 35 * len(tbl)))
             page_n = 12
             n_pages = max(1, (len(tbl) + page_n - 1) // page_n)
-            pg = st.number_input("缩略图页", 1, n_pages, 1) - 1 if n_pages > 1 else 0
+            gp1, gp2 = st.columns([1, 5])
+            pg = gp1.number_input("缩略图页", 1, n_pages, 1) - 1 if n_pages > 1 else 0
+            gp2.caption(f"第 {pg + 1}/{n_pages} 页 · 缩略图 = 功能色块平面（可达时）+ 全部 M 节点网络（骨架加粗）· 点「选择」即选定该楼层")
             sub = tbl.iloc[pg * page_n:(pg + 1) * page_n]
-            cols = st.columns(6)
-            for i, (_, rr) in enumerate(sub.iterrows()):
-                with cols[i % 6]:
-                    thumb = wb.floor_thumbnail(rr["floor_id"])
-                    if thumb:
-                        st.image(thumb, width="stretch")
-                    sc = f"评分 {rr['score']:.2f} · " if pd.notna(rr.get("score")) else ""
-                    st.caption(f"**{rr['floor_id']}**  \n{sc}{rr.get('layout_type') or ''}  \n{int(rr['n_nodes']) if pd.notna(rr.get('n_nodes')) else '?'} 节点 · {int(rr['area_m2']) if pd.notna(rr.get('area_m2')) else '?'} m² · {int(rr['n_entrances']) if pd.notna(rr.get('n_entrances')) else '?'} 出入口")
-                    if st.button("选择", key=f"pick_{rr['floor_id']}"):
-                        S["ui3_reno_fid"] = rr["floor_id"]
+
+            def _pick(fid: str) -> None:
+                S["ui3_reno_fid"] = fid
+                S["ui3_reno_select"] = fid  # drives the selectbox below
+
+            for r0 in range(0, len(sub), 6):
+                cols = st.columns(6)
+                for col, (_, rr) in zip(cols, sub.iloc[r0:r0 + 6].iterrows()):
+                    with col:
+                        thumb = wb.floor_thumbnail(rr["floor_id"])
+                        if thumb:
+                            st.image(thumb, width=190)
+                        sc = f"评分 {rr['score']:.2f} · " if pd.notna(rr.get("score")) else ""
+                        nn = int(rr["n_nodes"]) if pd.notna(rr.get("n_nodes")) else "?"
+                        ar = f"{int(rr['area_m2']):,}" if pd.notna(rr.get("area_m2")) else "?"
+                        ne = int(rr["n_entrances"]) if pd.notna(rr.get("n_entrances")) else "?"
+                        sel_mark = " ✅" if S.get("ui3_reno_fid") == rr["floor_id"] else ""
+                        st.caption(f"**{rr['floor_id']}**{sel_mark}  \n{sc}{rr.get('layout_type') or ''}  \n{nn} 节点 · {ar} m² · {ne} 出入口")
+                        st.button("选择", key=f"pick_{rr['floor_id']}", on_click=_pick, args=(rr["floor_id"],), width="stretch")
         floors = tbl["floor_id"].tolist() if len(tbl) else floors
     if floors:
-        default_fid = S.get("ui3_reno_fid") if S.get("ui3_reno_fid") in floors else floors[0]
-        fid = st.selectbox("楼层", floors, index=floors.index(default_fid), key="ui3_reno_select")
+        if S.get("ui3_reno_select") not in floors:
+            S["ui3_reno_select"] = S.get("ui3_reno_fid") if S.get("ui3_reno_fid") in floors else floors[0]
+        fid = st.selectbox("选定楼层", floors, key="ui3_reno_select")
         S["ui3_reno_fid"] = fid
         pc1, pc2 = st.columns([1, 3])
         with pc1:
-            th = wb.floor_thumbnail(fid, size=3.0, dpi=110)
+            th = wb.floor_thumbnail(fid)
             if th:
-                st.image(th, caption=f"{fid} 现状", width="stretch")
+                st.image(th, caption=f"{fid} 现状", width=260)
         c1, c2, c3, c4 = st.columns(4)
         seed = c1.number_input("seed", 0, 100000, 0, key="reno_seed")
         ncand = c2.number_input("内部候选数（按改造目标择优）", 1, 16, 6)

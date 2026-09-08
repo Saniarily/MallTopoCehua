@@ -219,22 +219,57 @@ class Workbench:
             rows.append(row)
         return rows
 
-    def floor_thumbnail(self, floor_id: str, size: float = 2.2, dpi: int = 90) -> bytes | None:
-        """Small PNG of the real network in its outline (for the floor picker)."""
+    def floor_thumbnail(self, floor_id: str, size_px: int = 360, use_cache: bool = True) -> bytes | None:
+        """Square PNG for the floor picker: the colour-block plan (``clean_img``) as background when reachable, the full
+        real M network on top (skeleton edges emphasised), the outline as a thin frame. Fixed canvas (uniform gallery),
+        cached on disk under ``outputs/cache/thumbnails/<floor>_<size>.png`` (a few tens of kB each)."""
         import io
 
         import matplotlib.pyplot as plt
 
-        from mall_space_planner.hub.viz import draw_network_in_outline
+        from mall_space_planner.hub.viz import draw_network_in_outline, poly
 
+        cache = ROOT / "outputs" / "cache" / "thumbnails" / f"{floor_id}_{size_px}.png"
+        if use_cache and cache.exists():
+            return cache.read_bytes()
         rn = self.catalog.real_network(floor_id)
         if rn is None:
             return None
-        fig, ax = plt.subplots(figsize=(size, size))
+        outline = rn["outline"]
+        dpi = 100
+        fig, ax = plt.subplots(figsize=(size_px / dpi, size_px / dpi), dpi=dpi)
+        bg_ok = False
+        try:  # colour-block plan as background, placed in the outline's metre frame via the pixel transform
+            ds, _ = self._stage3_dataset()
+            pp = ds.paths.plan_png(floor_id, 0)
+            if pp is not None:
+                from PIL import Image
+
+                img = np.asarray(Image.open(pp).convert("RGB"))
+                H, W = img.shape[:2]
+                (x0, y0), (x1, y1) = outline.px_to_m(np.array([[0.0, 0.0], [float(W), float(H)]]))
+                ax.imshow(img, extent=(min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)), interpolation="bilinear", zorder=0, alpha=0.95)
+                bg_ok = True
+        except Exception:  # noqa: BLE001
+            bg_ok = False
+        if not bg_ok:
+            poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=0.8)
         sk = set(rn["skeleton"].nodes) if rn["skeleton"] is not None else set()
-        draw_network_in_outline(ax, rn["full"], rn["positions"], rn["outline"], sk, node_size=6)
-        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0.02); plt.close(fig)
-        return buf.getvalue()
+        draw_network_in_outline(ax, rn["full"], rn["positions"], None, sk, node_size=9)
+        poly(ax, outline.polygon, fc="none", ec="#222", lw=0.9)
+        minx, miny, maxx, maxy = outline.polygon.bounds
+        cx, cy, half = (minx + maxx) / 2, (miny + maxy) / 2, 0.53 * max(maxx - minx, maxy - miny)
+        ax.set_xlim(cx - half, cx + half); ax.set_ylim(cy - half, cy + half)
+        ax.set_aspect("equal"); ax.axis("off")
+        fig.subplots_adjust(0, 0, 1, 1)
+        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=dpi, facecolor="white"); plt.close(fig)
+        data = buf.getvalue()
+        if use_cache:
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True); cache.write_bytes(data)
+            except OSError:
+                pass
+        return data
 
     def renovate(self, floor_id: str, seed: int = 0, n_candidates: int = 6, use_score: bool = True, keep_skeleton_positions: bool = False, restarts: int = 4, iters: int = 100) -> dict[str, Any]:
         ds, gd = self._stage3_dataset()
