@@ -241,8 +241,19 @@ def candidate_file(session_id: str, index: int, fmt: str) -> Response:
 
 # --------------------------------------------------------------------------------------------------- renovation (UI 3)
 @app.get("/api/renovation/floors")
-def renovation_floors(low_score: float | None = None, limit: int = 50, min_nodes: int = 12, min_area: float = 6000.0) -> list[str]:
-    return workbench().renovation_floors(low_score, limit, min_nodes, min_area)
+def renovation_floors(low_score: float | None = None, limit: int = 500, min_nodes: int = 12, min_area: float = 6000.0, filtered: bool = False, with_meta: bool = False) -> Any:
+    """All built floors with reachable graph CSVs (default) or the recommended subset (``filtered=true``)."""
+    wb = workbench()
+    ids = wb.renovation_floors(low_score, limit, min_nodes, min_area) if filtered else wb.renovation_floor_ids()[:limit]
+    return wb.renovation_floor_table(ids) if with_meta else ids
+
+
+@app.get("/api/renovation/floors/{floor_id}/thumbnail.png")
+def renovation_thumbnail(floor_id: str) -> Response:
+    png = workbench().floor_thumbnail(floor_id)
+    if png is None:
+        raise HTTPException(404, "no real network / outline for this floor")
+    return Response(png, media_type="image/png")
 
 
 class RenovateRequest(BaseModel):

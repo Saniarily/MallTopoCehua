@@ -27,6 +27,7 @@ from mall_space_planner.stage2.base import GenerationRequest
 from mall_space_planner.stage3 import CorridorFitter, FitParams, Outline, RenderParams, outline_from_points, render_corridors
 from mall_space_planner.stage3.evaluate import evaluate_fit
 from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, make_score_fn, renovate_floor, select_floors, topo_indicators
+from mall_space_planner.topology.convert import to_networkx
 from mall_space_planner.utils.config import resolve_config
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -157,32 +158,88 @@ class Workbench:
         return [self.generate_candidate(skeleton, prototype_id, outline, n_target, seed + i, index=i, **kw) for i in range(n_candidates)]
 
     # ---- renovation ----------------------------------------------------------------------------------------------------
-    def renovation_floors(self, low_score: float | None = None, limit: int = 100, min_nodes: int = 12, min_area: float = 6000.0) -> list[str]:
-        """Built floors eligible for the renovation workflow (graph CSVs reachable)."""
-        try:
-            from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
-
-            ds = Stage3Dataset(Stage3Paths.from_config(resolve_config("configs/data/legacy.yaml", [])))
-            gd = ds.paths.graph_dir
-            if gd is None or not gd.exists():
-                gd = ROOT / "tests/fixtures/graph_csv"; ds.paths.graph_dir = gd
-            ids = sorted({p.name[: -len("_M.csv")] for p in gd.glob("*_M.csv") if not p.name.endswith("_M_simplified.csv")})
-            df = self.catalog.cases
-            if "split" in df:  # prefer test floors (never seen by the ranker / generator)
-                test_ids = set(df.loc[df["split"] == "test", self.catalog.db.id_col].astype(str))
-                ids = [i for i in ids if i in test_ids] or ids
-            return select_floors(ds, gd, ids[: max(limit * 5, 200)], cases=df, low_score=low_score, min_nodes=min_nodes, min_area_m2=min_area, require_entrance=True, prefer_floors=(1, 2))[:limit] or ids[:limit]
-        except Exception:  # noqa: BLE001
-            return []
-
-    def renovate(self, floor_id: str, seed: int = 0, n_candidates: int = 6, use_score: bool = True, keep_skeleton_positions: bool = False, restarts: int = 4, iters: int = 100) -> dict[str, Any]:
+    def _stage3_dataset(self):  # noqa: ANN202
         from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
 
         ds = Stage3Dataset(Stage3Paths.from_config(resolve_config("configs/data/legacy.yaml", [])))
         gd = ds.paths.graph_dir
-        if gd is None or not (gd / f"{floor_id}_M.csv").exists():
+        if gd is None or not gd.exists() or not any(gd.glob("*_M.csv")):
             gd = ROOT / "tests/fixtures/graph_csv"
         ds.paths.graph_dir = gd
+        return ds, gd
+
+    def renovation_floor_ids(self) -> list[str]:
+        """Every built floor whose graph CSVs (M / M_simplified / total) are reachable – no filtering."""
+        try:
+            _, gd = self._stage3_dataset()
+            return sorted({p.name[: -len("_M.csv")] for p in gd.glob("*_M.csv") if not p.name.endswith("_M_simplified.csv") and (gd / f"{p.name[: -len('_M.csv')]}_total.csv").exists()})
+        except Exception:  # noqa: BLE001
+            return []
+
+    def renovation_floors(self, low_score: float | None = None, limit: int = 100, min_nodes: int = 12, min_area: float = 6000.0, prefer_floors: tuple[int, ...] | None = (1, 2), require_entrance: bool = True, splits: tuple[str, ...] | None = None) -> list[str]:
+        """Floors recommended for the renovation workflow (filter on nodes / area / floor index / entrance / score).
+        ``splits=None`` = all floors (default since the designer picks the case); pass ("test",) to restrict."""
+        try:
+            ds, gd = self._stage3_dataset()
+            ids = self.renovation_floor_ids()
+            df = self.catalog.cases
+            if splits and "split" in df:
+                keep = set(df.loc[df["split"].isin(splits), self.catalog.db.id_col].astype(str))
+                ids = [i for i in ids if i in keep] or ids
+            return select_floors(ds, gd, ids, cases=df, low_score=low_score, min_nodes=min_nodes, min_area_m2=min_area, require_entrance=require_entrance, prefer_floors=tuple(prefer_floors) if prefer_floors else ())[:limit]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def renovation_floor_table(self, floor_ids: list[str]) -> list[dict[str, Any]]:
+        """Per-floor metadata for the floor picker: mall score / type / area / node count / floor index / entrances."""
+        from shapely.geometry import Point
+
+        from mall_space_planner.data.corpus_builder import load_target_csv
+        from mall_space_planner.data.legacy_adapter import split_floor_id
+        from mall_space_planner.stage3.outline import m_positions_from_total_csv
+
+        ds, gd = self._stage3_dataset()
+        df = self.catalog.cases
+        rows = []
+        for fid in floor_ids:
+            mall, k = split_floor_id(fid)
+            row = {"floor_id": fid, "mall_id": mall, "floor": k}
+            case = df[df[self.catalog.db.id_col].astype(str) == fid]
+            if not case.empty:
+                c = case.iloc[0]
+                row.update({"score": c.get(self.catalog.db.label_col), "layout_type": c.get("layout_type"), "split": c.get("split")})
+            try:
+                before = load_target_csv(gd / f"{fid}_M.csv")
+                outline = ds.outline(fid, 0)
+                gt = m_positions_from_total_csv(gd / f"{fid}_total.csv", outline)
+                g = to_networkx(before)
+                row.update({"n_nodes": before.num_nodes, "area_m2": round(outline.area), "n_entrances": int(sum(1 for v in g.nodes if g.degree(v) == 1 and v in gt and outline.polygon.exterior.distance(Point(gt[v])) <= 40.0))})
+            except Exception:  # noqa: BLE001
+                pass
+            rows.append(row)
+        return rows
+
+    def floor_thumbnail(self, floor_id: str, size: float = 2.2, dpi: int = 90) -> bytes | None:
+        """Small PNG of the real network in its outline (for the floor picker)."""
+        import io
+
+        import matplotlib.pyplot as plt
+
+        from mall_space_planner.hub.viz import draw_network_in_outline
+
+        rn = self.catalog.real_network(floor_id)
+        if rn is None:
+            return None
+        fig, ax = plt.subplots(figsize=(size, size))
+        sk = set(rn["skeleton"].nodes) if rn["skeleton"] is not None else set()
+        draw_network_in_outline(ax, rn["full"], rn["positions"], rn["outline"], sk, node_size=6)
+        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0.02); plt.close(fig)
+        return buf.getvalue()
+
+    def renovate(self, floor_id: str, seed: int = 0, n_candidates: int = 6, use_score: bool = True, keep_skeleton_positions: bool = False, restarts: int = 4, iters: int = 100) -> dict[str, Any]:
+        ds, gd = self._stage3_dataset()
+        if not (gd / f"{floor_id}_M.csv").exists():
+            raise FileNotFoundError(f"{floor_id}_M.csv not found under {gd}")
         score_fn = None
         if use_score:
             try:
@@ -215,7 +272,7 @@ class Workbench:
         d = c.plan.diagnostics
         checks = [
             ("平面（无交叉）", c.metrics.get("crossings", 0) == 0, f"交叉 {c.metrics.get('crossings')}"),
-            ("全部在轮廓内", (c.metrics.get("inside_ratio") or 0) >= 0.999, f"{(c.metrics.get('inside_ratio') or 0) * 100:.0f}%"),
+            ("全部在轮廓内（节点 + 走廊）", (c.metrics.get("inside_ratio") or 0) >= 0.999 and not c.metrics.get("edges_outside"), f"节点 {(c.metrics.get('inside_ratio') or 0) * 100:.0f}% · 越界走廊 {c.metrics.get('edges_outside', 0)}"),
             ("出入口 ≥ 最小值", d.get("n_entrances", 0) >= min_entrances, f"{d.get('n_entrances')} / {min_entrances}"),
             ("无内部断头（除竖向核）", c.indicators.get("n_components", 1) == 1, f"连通分量 {c.indicators.get('n_components')}"),
             ("锐角率 ≤ 阈值", (c.metrics.get("sharp_angle_rate") or 0) <= max_sharp, f"{c.metrics.get('sharp_angle_rate', 0):.2f} / {max_sharp}"),
@@ -230,6 +287,8 @@ class Workbench:
         d = c.plan.diagnostics
         if c.metrics.get("crossings", 0):
             out.append(f"网络有 {c.metrics['crossings']} 处交叉：请重新生成或减少节点数")
+        if c.metrics.get("edges_outside", 0):
+            out.append(f"{c.metrics['edges_outside']} 段走廊跨出轮廓凹角（L / U 型平面）：请重新生成")
         if d.get("n_vertical_cores", 0) > 3:
             out.append(f"{d['n_vertical_cores']} 个内部断头被解释为竖向交通核；若为首层请检查是否应为出入口")
         if (c.metrics.get("sharp_angle_rate") or 0) > 0.25:
