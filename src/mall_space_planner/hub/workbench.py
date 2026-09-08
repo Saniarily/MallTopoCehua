@@ -191,15 +191,16 @@ class Workbench:
             return []
 
     def renovation_floor_table(self, floor_ids: list[str]) -> list[dict[str, Any]]:
-        """Per-floor metadata for the floor picker: mall score / type / area / node count / floor index / entrances."""
-        from shapely.geometry import Point
-
-        from mall_space_planner.data.corpus_builder import load_target_csv
+        """Per-floor metadata for the floor picker: mall score / type / area / node count / floor index / entrances.
+        Uses ``outputs/floor_plates/floors.csv`` (scripts/export_floor_plates.py) when present – instant; otherwise the
+        graph CSVs are parsed (≈ 0.1 s per floor, cached in memory for the session)."""
         from mall_space_planner.data.legacy_adapter import split_floor_id
-        from mall_space_planner.stage3.outline import m_positions_from_total_csv
+        from mall_space_planner.hub.plates import load_plates_table
 
-        ds, gd = self._stage3_dataset()
         df = self.catalog.cases
+        pre = load_plates_table()
+        pre_rows = {str(r["floor_id"]): r for _, r in pre.iterrows()} if pre is not None else {}
+        cache = self.__dict__.setdefault("_floor_meta_cache", {})
         rows = []
         for fid in floor_ids:
             mall, k = split_floor_id(fid)
@@ -208,62 +209,45 @@ class Workbench:
             if not case.empty:
                 c = case.iloc[0]
                 row.update({"score": c.get(self.catalog.db.label_col), "layout_type": c.get("layout_type"), "split": c.get("split")})
-            try:
-                before = load_target_csv(gd / f"{fid}_M.csv")
-                outline = ds.outline(fid, 0)
-                gt = m_positions_from_total_csv(gd / f"{fid}_total.csv", outline)
-                g = to_networkx(before)
-                row.update({"n_nodes": before.num_nodes, "area_m2": round(outline.area), "n_entrances": int(sum(1 for v in g.nodes if g.degree(v) == 1 and v in gt and outline.polygon.exterior.distance(Point(gt[v])) <= 40.0))})
-            except Exception:  # noqa: BLE001
-                pass
+            if fid in pre_rows:
+                r = pre_rows[fid]
+                row.update({kk: r.get(kk) for kk in ("n_nodes", "area_m2", "n_entrances", "nodes_outside", "align_mode") if kk in r})
+            elif fid in cache:
+                row.update(cache[fid])
+            else:
+                try:
+                    from shapely.geometry import Point
+
+                    from mall_space_planner.hub.plates import load_floor
+
+                    ds, gd = self._stage3_dataset()
+                    rn = load_floor(fid, ds, gd)
+                    g = to_networkx(rn["full"]); gt = rn["positions"]; outline = rn["outline"]
+                    meta = {"n_nodes": rn["full"].num_nodes, "area_m2": round(outline.area), "n_entrances": int(sum(1 for v in g.nodes if g.degree(v) == 1 and v in gt and outline.polygon.exterior.distance(Point(gt[v])) <= 40.0))}
+                    cache[fid] = meta; row.update(meta)
+                except Exception:  # noqa: BLE001
+                    pass
             rows.append(row)
         return rows
 
     def floor_thumbnail(self, floor_id: str, size_px: int = 360, use_cache: bool = True) -> bytes | None:
-        """Square PNG for the floor picker: the colour-block plan (``clean_img``) as background when reachable, the full
-        real M network on top (skeleton edges emphasised), the outline as a thin frame. Fixed canvas (uniform gallery),
-        cached on disk under ``outputs/cache/thumbnails/<floor>_<size>.png`` (a few tens of kB each)."""
-        import io
+        """Square PNG for the floor picker. Order: pre-rendered ``outputs/floor_plates/thumbs/<floor>.png`` (from
+        ``scripts/export_floor_plates.py``) → disk cache ``outputs/cache/thumbnails`` → render now (colour-block plan as
+        background when reachable, full M network on top, outline frame) and cache."""
+        from mall_space_planner.hub.plates import find_prerendered_thumbnail, load_floor, render_thumbnail_bytes
 
-        import matplotlib.pyplot as plt
-
-        from mall_space_planner.hub.viz import draw_network_in_outline, poly
-
+        pre = find_prerendered_thumbnail(floor_id)
+        if pre is not None:
+            return pre.read_bytes()
         cache = ROOT / "outputs" / "cache" / "thumbnails" / f"{floor_id}_{size_px}.png"
         if use_cache and cache.exists():
             return cache.read_bytes()
-        rn = self.catalog.real_network(floor_id)
-        if rn is None:
-            return None
-        outline = rn["outline"]
-        dpi = 100
-        fig, ax = plt.subplots(figsize=(size_px / dpi, size_px / dpi), dpi=dpi)
-        bg_ok = False
-        try:  # colour-block plan as background, placed in the outline's metre frame via the pixel transform
-            ds, _ = self._stage3_dataset()
-            pp = ds.paths.plan_png(floor_id, 0)
-            if pp is not None:
-                from PIL import Image
-
-                img = np.asarray(Image.open(pp).convert("RGB"))
-                H, W = img.shape[:2]
-                (x0, y0), (x1, y1) = outline.px_to_m(np.array([[0.0, 0.0], [float(W), float(H)]]))
-                ax.imshow(img, extent=(min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)), interpolation="bilinear", zorder=0, alpha=0.95)
-                bg_ok = True
+        try:
+            ds, gd = self._stage3_dataset()
+            rn = load_floor(floor_id, ds, gd)
         except Exception:  # noqa: BLE001
-            bg_ok = False
-        if not bg_ok:
-            poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=0.8)
-        sk = set(rn["skeleton"].nodes) if rn["skeleton"] is not None else set()
-        draw_network_in_outline(ax, rn["full"], rn["positions"], None, sk, node_size=9)
-        poly(ax, outline.polygon, fc="none", ec="#222", lw=0.9)
-        minx, miny, maxx, maxy = outline.polygon.bounds
-        cx, cy, half = (minx + maxx) / 2, (miny + maxy) / 2, 0.53 * max(maxx - minx, maxy - miny)
-        ax.set_xlim(cx - half, cx + half); ax.set_ylim(cy - half, cy + half)
-        ax.set_aspect("equal"); ax.axis("off")
-        fig.subplots_adjust(0, 0, 1, 1)
-        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=dpi, facecolor="white"); plt.close(fig)
-        data = buf.getvalue()
+            return None
+        data = render_thumbnail_bytes(rn, size_px)
         if use_cache:
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True); cache.write_bytes(data)

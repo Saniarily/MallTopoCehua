@@ -92,3 +92,20 @@ def test_api_fast_routes():
     assert c.post("/api/jobs", json={"kind": "train_stage1", "args": {}}).status_code == 400
     assert isinstance(c.get("/api/experiments/families").json(), list)
     assert c.get("/api/experiments/export?fmt=md").status_code == 200
+
+
+def test_export_floor_plates_fixture(tmp_path):
+    from mall_space_planner.hub.plates import find_prerendered_thumbnail, load_plates_table, render_floor_plates
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+
+    ds = Stage3Dataset(Stage3Paths(graph_dir=ROOT / "tests/fixtures/graph_csv"))
+    row = render_floor_plates("B000A0E928_1", ds, tmp_path)
+    assert row["status"] == "ok" and row["n_nodes"] == 50 and row["nodes_outside"] == 0
+    for k in ("plan_topo", "outline_topo", "thumbs"):
+        assert (tmp_path / k / "B000A0E928_1.png").stat().st_size > 1000
+    assert render_floor_plates("B000A0E928_1", ds, tmp_path)["status"] == "exists"
+    import pandas as pd
+
+    pd.DataFrame([row]).to_csv(tmp_path / "floors.csv", index=False)
+    assert find_prerendered_thumbnail("B000A0E928_1", tmp_path) is not None
+    assert load_plates_table(tmp_path)["floor_id"].iloc[0] == "B000A0E928_1"
