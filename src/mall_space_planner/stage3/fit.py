@@ -557,6 +557,11 @@ class CorridorFitter:
                             cands.append(pos[v] + (pos[u] - pos[v]) * t)
                 for _k in range(n_random):
                     cands.append(np.array([rng.uniform(minx, maxx), rng.uniform(miny, maxy)]))
+                if nb:  # local ring around the neighbour barycentre (small moves first)
+                    bary = np.mean([pos[u] for u in nb], axis=0)
+                    r0 = 0.5 * float(np.mean([np.linalg.norm(pos[u] - pos[v]) for u in nb]) + 1e-9)
+                    for ang in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+                        cands.append(bary + r0 * np.array([np.cos(ang), np.sin(ang)]))
                 old = pos[v]
                 best = (cur, old)
                 for c in cands:
@@ -656,8 +661,9 @@ class CorridorFitter:
         rng = np.random.RandomState(seed)
         depth = effective_depth(outline, p.shop_depth, p.depth_frac, p.depth_area_coef)
         inset = inset_region(outline, depth)
-        fixed_pos = {v: np.asarray(xy, float) for v, xy in (anchors or {}).items() if v in g.nodes}
+        fixed_pos = {v: np.asarray(xy, float) for v, xy in sorted((anchors or {}).items()) if v in g.nodes}
         fixed = set(fixed_pos)
+        g = nx.Graph(); g.add_nodes_from(sorted(to_networkx(topology).nodes)); g.add_edges_from(sorted(tuple(sorted(e)) for e in to_networkx(topology).edges))  # deterministic order (str hashing is randomised per process)
         # spacing adapts to how many key points must share the inset (never above the configured value)
         self._spacing_backup = p.min_spacing
         p.min_spacing = float(min(p.min_spacing, 0.85 * np.sqrt(inset.area / max(g.number_of_nodes(), 1))))
@@ -687,7 +693,10 @@ class CorridorFitter:
             pos1 = self.snap_corners(g, pos1, roles, inset, fixed=fixed)
             pos1 = self.open_angles(g, pos1, roles, inset, fixed=fixed)
             if count_crossings(g, pos1):
-                pos1 = self.repair_crossings(g, pos1, roles, inset, rng, fixed=fixed)
+                pos1 = self.repair_crossings(g, pos1, roles, inset, rng, passes=6 if fixed else 3, n_random=48 if fixed else 12, fixed=fixed)
+                if fixed and count_crossings(g, pos1):  # anchored edges cannot move: re-relax the new nodes from the repaired start
+                    pos1 = self.relax(g, pos1, roles, inset, lines, frame, rng, fixed=fixed)
+                    pos1 = self.repair_crossings(g, pos1, roles, inset, rng, passes=6, n_random=48, fixed=fixed)
             s, diag = self.score(g, pos1, roles, inset, lines, frame, fixed)
             if best is None or s < best[0]:
                 best = (s, pos1, diag)

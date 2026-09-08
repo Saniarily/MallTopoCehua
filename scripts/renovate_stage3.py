@@ -43,7 +43,7 @@ from mall_space_planner.data.corpus_builder import load_target_csv  # noqa: E402
 from mall_space_planner.data.legacy_adapter import load_graph_csv, split_floor_id  # noqa: E402
 from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, render_corridors  # noqa: E402
 from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths  # noqa: E402
-from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, renovate_floor  # noqa: E402
+from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, renovate_floor  # noqa: E402
 from mall_space_planner.topology.convert import to_networkx  # noqa: E402
 from mall_space_planner.utils.config import resolve_config  # noqa: E402
 
