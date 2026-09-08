@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mall_space_planner.stage3.outline import DEFAULT_M_PER_PX, Outline, outline_from_mask, outline_from_total_csv
+from mall_space_planner.stage3.outline import DEFAULT_M_PER_PX, Outline, align_outline_to_csv, outline_from_mask, outline_from_total_csv
 
 FUNC_COLOURS_RGB = {  # clean_img colour blocks (from readme.md); func index → (r, g, b)
     "corridor": (252, 249, 242),
@@ -138,6 +138,9 @@ class Stage3Dataset:
         mp = self.paths.outline_mask(floor_id, region)
         if mp is not None:
             o = outline_from_mask(mp, area_m2=area_m2)
+            tp = self.paths.total_csv(floor_id)
+            if tp is not None:  # the graph CSV pixel frame may be shifted / rescaled against the processed mask PNG
+                o = align_outline_to_csv(o, tp)
         else:
             tp = self.paths.total_csv(floor_id)
             if tp is None:

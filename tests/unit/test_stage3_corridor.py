@@ -185,3 +185,42 @@ def test_nonconvex_outline_keeps_corridors_inside():
     pos = {k: np.asarray(v) for k, v in res.positions.items()}
     assert res.diagnostics["edges_outside"] == 0
     assert edges_outside(g, pos, outline.polygon) == 0
+
+
+def test_align_outline_to_csv_recovers_shift_and_scale(tmp_path):
+    """Mask PNG shifted / rescaled against the graph-CSV pixel frame: the alignment must put the M nodes back inside."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from shapely.affinity import scale, translate
+    from shapely.geometry import Point, Polygon
+
+    from mall_space_planner.data.corpus_builder import load_target_csv
+    from mall_space_planner.stage3.outline import align_outline_to_csv, m_positions_from_total_csv, outline_from_mask, outline_from_total_csv
+    from mall_space_planner.topology.convert import to_networkx
+
+    tot = Path("tests/fixtures/graph_csv/B000A0E928_1_total.csv")
+    base = outline_from_total_csv(tot)
+    poly_px = Polygon(base.m_to_px(np.array(base.polygon.exterior.coords)))
+    g = to_networkx(load_target_csv("tests/fixtures/graph_csv/B000A0E928_1_M.csv"))
+
+    def inside_rate(o) -> float:  # noqa: ANN001
+        gt = m_positions_from_total_csv(tot, o)
+        return float(np.mean([o.polygon.buffer(1.0).covers(Point(gt[v])) for v in g.nodes if v in gt]))
+
+    for i, (shift, sc) in enumerate([((-30, -40), 1.0), ((0, 0), 1.15), ((-25, -35), 0.9)]):
+        p = scale(translate(poly_px, *shift), sc, sc, origin=(0, 0))
+        _, _, maxx, maxy = p.bounds
+        img = Image.new("L", (int(maxx) + 10, int(maxy) + 10), 0)
+        ImageDraw.Draw(img).polygon([(x, y) for x, y in p.exterior.coords], fill=255)
+        mp = tmp_path / f"m{i}.png"; img.save(mp)
+        o = outline_from_mask(mp)
+        before = inside_rate(o)
+        o = align_outline_to_csv(o, tot)
+        assert inside_rate(o) >= 0.98 and inside_rate(o) >= before
+        assert o.extra["csv_align"]["mode"] != "identity"
+    # already aligned mask: identity kept
+    img = Image.new("L", (int(poly_px.bounds[2]) + 10, int(poly_px.bounds[3]) + 10), 0)
+    ImageDraw.Draw(img).polygon([(x, y) for x, y in poly_px.exterior.coords], fill=255)
+    mp = tmp_path / "same.png"; img.save(mp)
+    o = align_outline_to_csv(outline_from_mask(mp), tot)
+    assert o.extra["csv_align"]["mode"] == "identity"

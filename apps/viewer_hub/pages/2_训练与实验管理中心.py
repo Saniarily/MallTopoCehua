@@ -156,12 +156,25 @@ with tab_results:
                     st.dataframe(pq, width="stretch")
         rec = reg.get(sel[0]) if sel else None
         if rec is not None:
-            pngs = sorted(rec.path.glob("*.png"))[:12]
+            pngs = sorted(rec.path.glob("*.png"))
             if pngs:
-                st.markdown("**结果图**")
-                cols = st.columns(min(3, len(pngs)))
-                for i, p in enumerate(pngs):
-                    cols[i % len(cols)].image(str(p), caption=p.name)
+                st.markdown(f"**结果图**（{len(pngs)} 张）")
+                g1, g2, g3 = st.columns([1, 1, 3])
+                per_page = g1.selectbox("每页", [6, 12, 24, 48], index=1)
+                n_pages = max(1, (len(pngs) + per_page - 1) // per_page)
+                page = g2.number_input("页", 1, n_pages, 1) if n_pages > 1 else 1
+                pick = g3.selectbox("或直接查看单张", ["（全部）", *[p.name for p in pngs]])
+                if pick != "（全部）":
+                    p1 = rec.path / pick
+                    st.image(str(p1), caption=p1.name, width="stretch")
+                    st.download_button("下载", p1.read_bytes(), p1.name, "image/png", key=f"dlpng_{p1.name}")
+                else:
+                    ncol = 2 if per_page <= 6 else 3
+                    sub = pngs[(page - 1) * per_page: page * per_page]
+                    for r0 in range(0, len(sub), ncol):
+                        cols = st.columns(ncol)
+                        for col, p1 in zip(cols, sub[r0:r0 + ncol]):
+                            col.image(str(p1), caption=p1.name, width="stretch")
 
 # --------------------------------------------------------------------------------------------------------- checkpoints
 with tab_ckpt:

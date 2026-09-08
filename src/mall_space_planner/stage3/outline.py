@@ -37,8 +37,19 @@ class Outline:
     scale_source: str = "given"
     source: str = ""
     extra: dict = field(default_factory=dict)
+    # graph-CSV pixel frame -> outline (mask) pixel frame: x' = sx·x + tx, y' = sy·y + ty. The ``*_total.csv`` coordinates
+    # and the processed mask / plan PNGs are not always the same pixel frame (crop / padding); see ``align_to_csv``.
+    csv_to_px: tuple[float, float, float, float] = (1.0, 1.0, 0.0, 0.0)
 
     # ---- transforms ---------------------------------------------------------------------------
+    def csv_px_to_m(self, xy: np.ndarray) -> np.ndarray:
+        """Graph-CSV pixels (``*_total.csv`` CenterPoint / coordinates) -> metres in the outline frame."""
+        xy = np.asarray(xy, float).reshape(-1, 2).copy()
+        sx, sy, tx, ty = self.csv_to_px
+        xy[:, 0] = sx * xy[:, 0] + tx
+        xy[:, 1] = sy * xy[:, 1] + ty
+        return self.px_to_m(xy)
+
     def px_to_m(self, xy: np.ndarray) -> np.ndarray:
         xy = np.asarray(xy, float).reshape(-1, 2)
         out = (xy - np.asarray(self.origin_px)) * self.m_per_px
@@ -195,7 +206,7 @@ def m_positions_from_total_csv(path: str | Path, outline: Outline) -> dict[str, 
     out = {}
     for _, r in df[df["kind"] == "M"].iterrows():
         if r["center"]:
-            x, y = outline.px_to_m(np.array(r["center"], float))[0]
+            x, y = outline.csv_px_to_m(np.array(r["center"], float))[0]
             out[str(r["index"])] = (float(x), float(y))
     return out
 
@@ -206,10 +217,62 @@ def corridor_polygons_from_total_csv(path: str | Path, outline: Outline) -> list
     out = []
     for _, r in df[df["kind"] == "L"].iterrows():
         if r["poly"] and len(r["poly"]) >= 3:
-            g = Polygon(outline.px_to_m(np.array(r["poly"], float))).buffer(0)
+            g = Polygon(outline.csv_px_to_m(np.array(r["poly"], float))).buffer(0)
             if not g.is_empty:
                 out.append(g)
     return out
 
 
-__all__ = ["DEFAULT_M_PER_PX", "Outline", "corridor_polygons_from_total_csv", "m_positions_from_total_csv", "outline_from_mask", "outline_from_points", "outline_from_total_csv", "read_total_csv", "scale_from_area"]
+def align_outline_to_csv(outline: Outline, total_csv: str | Path, min_gain: float = 0.02) -> Outline:
+    """Estimate the affine map from the graph-CSV pixel frame to the mask pixel frame.
+
+    The processed mask / plan PNGs (``lrf处理``) are sometimes cropped or padded relative to the plan the graph CSVs were
+    digitised from, so the real key points appear shifted (typically down / right) against the outline. The shop unit
+    polygons of ``*_total.csv`` must fill the floor plate, so we pick – among identity, bbox-centre translation and
+    bbox-to-bbox scale + translation – the map that maximises the IoU of the shop union with the outline.
+    A candidate replaces identity only if it gains at least ``min_gain`` coverage; the result is recorded in
+    ``outline.extra["csv_align"]``."""
+    try:
+        df = read_total_csv(total_csv)
+    except Exception:  # noqa: BLE001
+        return outline
+    polys = [Polygon(p).buffer(0) for p in df["poly"] if p and len(p) >= 3]
+    polys = [g for g in polys if not g.is_empty]
+    if not polys:
+        return outline
+    shops = unary_union(polys)
+    # outline back in mask pixels
+    ext_px = outline.m_to_px(np.array(outline.polygon.exterior.coords))
+    mask_px = Polygon(ext_px).buffer(0)
+    if mask_px.is_empty:
+        return outline
+
+    def coverage(sx: float, sy: float, tx: float, ty: float) -> float:
+        """IoU of the transformed shop union with the mask (IoU – not plain coverage – separates a genuine rescale
+        from a translation that merely drops a smaller shape inside a bigger outline)."""
+        from shapely.affinity import affine_transform
+
+        g = affine_transform(shops, [sx, 0, 0, sy, tx, ty])
+        inter = g.intersection(mask_px).area
+        return float(inter / max(g.union(mask_px).area, 1e-9))
+
+    b_s = shops.bounds; b_m = mask_px.bounds
+    ws, hs = b_s[2] - b_s[0], b_s[3] - b_s[1]
+    wm, hm = b_m[2] - b_m[0], b_m[3] - b_m[1]
+    cands = {"identity": (1.0, 1.0, 0.0, 0.0)}
+    cands["translate"] = (1.0, 1.0, (b_m[0] + b_m[2]) / 2 - (b_s[0] + b_s[2]) / 2, (b_m[1] + b_m[3]) / 2 - (b_s[1] + b_s[3]) / 2)
+    if ws > 1 and hs > 1:
+        sx, sy = wm / ws, hm / hs
+        if 0.7 <= sx <= 1.4 and 0.7 <= sy <= 1.4:  # same plan, different resolution / padding; anything else is a different region
+            cands["scale"] = (sx, sy, b_m[0] - sx * b_s[0], b_m[1] - sy * b_s[1])
+            s_iso = float(np.sqrt(sx * sy))
+            cands["scale_iso"] = (s_iso, s_iso, (b_m[0] + b_m[2]) / 2 - s_iso * (b_s[0] + b_s[2]) / 2, (b_m[1] + b_m[3]) / 2 - s_iso * (b_s[1] + b_s[3]) / 2)
+    scores = {k: coverage(*v) for k, v in cands.items()}
+    best = max(scores, key=lambda k: (scores[k], k == "identity"))
+    if best != "identity" and scores[best] >= scores["identity"] + min_gain:
+        outline.csv_to_px = tuple(float(x) for x in cands[best])  # type: ignore[assignment]
+    outline.extra["csv_align"] = {"mode": best if scores[best] >= scores["identity"] + min_gain else "identity", "coverage_identity": round(scores["identity"], 4), "coverage_best": round(scores[best], 4), "shift_px": (round(outline.csv_to_px[2], 1), round(outline.csv_to_px[3], 1)), "scale": (round(outline.csv_to_px[0], 4), round(outline.csv_to_px[1], 4))}
+    return outline
+
+
+__all__ = ["DEFAULT_M_PER_PX", "align_outline_to_csv", "Outline", "corridor_polygons_from_total_csv", "m_positions_from_total_csv", "outline_from_mask", "outline_from_points", "outline_from_total_csv", "read_total_csv", "scale_from_area"]

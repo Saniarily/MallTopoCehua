@@ -278,3 +278,14 @@ inside (node containment ≠ edge containment). `CorridorFitter` now tests **edg
 (inset by 1 m) in relax / crossing repair / angle opening / corner snapping, adds `repair_outside()` after init and after
 relax, and scores `2 × edges_outside`; `evaluate_fit` reports `edges_outside`. Sandbox check (3 seeds each): L outline
 2 / 1 / 0 → 0 / 0 / 0 outside edges, U outline 3 / 2 / 3 → 0 / 0 / 0, crossings unchanged at 0; fixture renovation still 0 crossings.
+
+### Data fix: graph-CSV ↔ mask pixel-frame alignment (2026-09-08)
+UI 1 showed a minority of real floors whose M nodes sit outside the outline, always shifted down / right: the processed
+mask / plan PNGs (`lrf处理`) are cropped or padded relative to the plan the graph CSVs were digitised from.
+`align_outline_to_csv` (called by `Stage3Dataset.outline` whenever a mask is used) estimates the affine map CSV-px → mask-px
+among {identity, bbox-centre translation, bbox scale + translation, isotropic scale} by maximising the IoU of the shop-unit
+union (`*_total.csv` polygons, which must fill the floor plate) with the mask; it replaces identity only when IoU gains
+≥ 0.02 and records the choice in `Outline.extra["csv_align"]`. All CSV pixel readers (`m_positions_from_total_csv`,
+`corridor_polygons_from_total_csv`) go through `Outline.csv_px_to_m`. Synthetic check on the fixture floor: shifted mask
+(−30, −40 px) inside-rate 0.76 → 1.00, rescaled ×1.15 0.00 → 1.00, shift + scale ×0.9 0.00 → 1.00, aligned mask keeps identity
+(unit test). UI 1 prints the alignment and warns when nodes remain outside (then CSV and mask are different regions).
