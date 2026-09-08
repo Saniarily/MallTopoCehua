@@ -32,7 +32,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,97 +39,18 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from mall_space_planner.data.corpus_builder import load_target_csv  # noqa: E402
-from mall_space_planner.data.legacy_adapter import load_graph_csv, split_floor_id  # noqa: E402
-from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, render_corridors  # noqa: E402
+from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams  # noqa: E402
 from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths  # noqa: E402
-from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, make_score_fn, renovate_floor, select_floors  # noqa: E402
-from mall_space_planner.topology.convert import to_networkx  # noqa: E402
+from mall_space_planner.stage3.renovate import BETTER, build_generator, make_score_fn, renovate_floor, select_floors  # noqa: E402
 from mall_space_planner.utils.config import resolve_config  # noqa: E402
 
 def draw(r: dict, out_png: Path, gen_name: str, title: str) -> None:  # noqa: ANN001
-    import matplotlib
-
-    matplotlib.use("Agg")
+    """Four-panel figure (shared with the Viewer Hub: mall_space_planner.hub.viz.draw_renovation)."""
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Polygon as MplPolygon
 
-    from mall_space_planner.reporting.style import apply_style
+    from mall_space_planner.hub.viz import draw_renovation
 
-    try:
-        apply_style()
-    except Exception:  # noqa: BLE001
-        pass
-    outline, sk = r["outline"], r["sk_nodes"]
-
-    def poly(ax, geom, **kw):  # noqa: ANN001, ANN202
-        for p in getattr(geom, "geoms", [geom]):
-            if p.is_empty:
-                continue
-            ax.add_patch(MplPolygon(np.array(p.exterior.coords), closed=True, **kw))
-            for ring in p.interiors:
-                ax.add_patch(MplPolygon(np.array(ring.coords), closed=True, fc="white", ec=kw.get("ec", "none"), lw=kw.get("lw", 0.5)))
-
-    def net(ax, topo, pos, sk_nodes, ttl):  # noqa: ANN001, ANN202
-        g = to_networkx(topo)
-        poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
-        for u, v in g.edges:
-            if u in pos and v in pos:
-                main = u in sk_nodes and v in sk_nodes
-                ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]], color="#D9480F" if main else "#e8a37a", lw=1.5 if main else 0.9, zorder=3)
-        xs = [pos[v][0] for v in g.nodes if v in pos]; ys = [pos[v][1] for v in g.nodes if v in pos]
-        col = ["#2B2B2B" if v in sk_nodes else "#1f77b4" for v in g.nodes if v in pos]
-        ax.scatter(xs, ys, s=16, c=col, zorder=5, edgecolors="white", linewidths=0.5)
-        ax.set_aspect("equal"); ax.autoscale(); ax.axis("off"); ax.set_title(ttl, fontsize=9)
-
-    fig, axes = plt.subplots(1, 4, figsize=(17, 5.8), gridspec_kw={"width_ratios": [1, 1, 1, 0.9]})
-    ib, ia = r["ind_b"], r["ind_a"]
-    net(axes[0], r["before"], r["gt"], sk, f"① 现状：真实关键点网络\n{ib['num_nodes']} 节点 · {ib['num_cycles']} 回路 · ASPL {ib['avg_shortest_path']:.2f}")
-    P = {k: np.asarray(v) for k, v in r["res"].positions.items()}
-    net(axes[1], r["after"], P, sk, f"② 更新：{gen_name}（黑 = 原型节点，位置重排；红框 = 保留的出入口）\n{ia['num_nodes']} 节点 · {ia['num_cycles']} 回路 · ASPL {ia['avg_shortest_path']:.2f}")
-    for v in r.get("anchored", ()):
-        if v in P:
-            axes[1].scatter([P[v][0]], [P[v][1]], s=70, facecolors="none", edgecolors="#D9480F", linewidths=1.2, zorder=6)
-    ax = axes[2]
-    plan = r["plan"]
-    poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
-    poly(ax, plan.corridors_secondary, fc="#F7DDB0", ec="#b07a2a", lw=0.4)
-    poly(ax, plan.corridors_main, fc="#F0C987", ec="#b07a2a", lw=0.5)
-    for at in plan.atria:
-        poly(ax, at, fc="#B5E7A0", ec="#5a9a4a", lw=0.5)
-    for e in plan.entrances:
-        poly(ax, e["stub"], fc="#F0C987", ec="#b07a2a", lw=0.4)
-        ax.scatter([e["point"][0]], [e["point"][1]], marker="v", s=60, c="#D9480F", zorder=6)
-    for vc in plan.vertical_cores:
-        poly(ax, vc["polygon"], fc="#9e9e9e", ec="#555", lw=0.5)
-    d = plan.diagnostics
-    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
-    ax.set_title(f"③ 走廊布局方案\n主廊 {d['main_width_m']:.0f} m / 次廊 {d['secondary_width_m']:.0f} m · {d['n_entrances']} 出入口 · {d['n_vertical_cores']} 竖向核 · {d['n_atria']} 中庭 · 占比 {d['corridor_ratio']*100:.0f}%", fontsize=9)
-    # metric table
-    ax = axes[3]; ax.axis("off")
-    keys = ["pred_score", "num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "avg_degree", "n_dead_ends"]
-    rows = []
-    for k in keys:
-        b, a = ib.get(k), ia.get(k)
-        if b is None or a is None:
-            continue
-        better = BETTER.get(k, 0)
-        arrow = "" if better == 0 or abs(a - b) < 1e-9 else ("▲" if (a - b) * better > 0 else "▼")
-        rows.append([TOPO_LABEL[k], f"{b:.2f}" if isinstance(b, float) else str(b), f"{a:.2f}" if isinstance(a, float) else str(a), arrow])
-    row_r = r["row"]
-    if row_r.get("before_sharp_angle_rate") is not None:
-        b, a = row_r["before_sharp_angle_rate"], row_r["after_sharp_angle_rate"]
-        rows.append(["锐角(<60°)比例", f"{b:.2f}", f"{a:.2f}", "" if abs(a - b) < 1e-9 else ("▲" if a < b else "▼")])
-    tbl = ax.table(cellText=rows, colLabels=["指标", "现状", "更新", ""], loc="center", cellLoc="center", colWidths=[0.5, 0.18, 0.18, 0.1])
-    tbl.auto_set_font_size(False); tbl.set_fontsize(8.5); tbl.scale(1, 1.35)
-    for (i, j), c in tbl.get_celld().items():
-        c.set_edgecolor("#bbb")
-        if i == 0:
-            c.set_text_props(fontweight="bold")
-        if j == 3 and i > 0:
-            c.set_text_props(color="#2e7d32" if rows[i - 1][3] == "▲" else ("#c62828" if rows[i - 1][3] == "▼" else "#333"))
-    ax.set_title("④ 关键拓扑指标：现状 vs 更新（▲ 改善）", fontsize=9)
-    fig.suptitle(title, x=0.01, ha="left", fontweight="bold", fontsize=11)
-    fig.tight_layout()
+    fig = draw_renovation(r, gen_name, title)
     fig.savefig(out_png, dpi=160)
     plt.close(fig)
 

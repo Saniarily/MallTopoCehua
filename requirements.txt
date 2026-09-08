@@ -23,10 +23,11 @@ pytest>=7.4
 # torch>=2.1
 # torch-geometric>=2.5
 
-# Optional: explainability / apps / tracking
+# Optional: explainability / tracking
 # shap>=0.44
-# streamlit>=1.30
-# fastapi>=0.104
-# uvicorn>=0.24
-# plotly>=5.18
+# Phase 5 Viewer Hub (or: pip install -e ".[app]")
+streamlit>=1.30
+fastapi>=0.104
+uvicorn>=0.24
+plotly>=5.18
 # mlflow>=2.9

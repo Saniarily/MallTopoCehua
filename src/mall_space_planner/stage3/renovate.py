@@ -237,7 +237,7 @@ def renovate_floor(fid: str, graph_dir: Path, ds, gen, fitter: CorridorFitter, r
            "after_corridor_ratio": plan.diagnostics["corridor_ratio"], "after_n_entrances": plan.diagnostics["n_entrances"], "after_n_atria": plan.diagnostics["n_atria"], "after_n_vertical_cores": plan.diagnostics["n_vertical_cores"],
            "before_corridor_ratio": plan_b.diagnostics["corridor_ratio"] if plan_b else None, "before_n_entrances": plan_b.diagnostics["n_entrances"] if plan_b else None, "before_n_atria": plan_b.diagnostics["n_atria"] if plan_b else None,
            "n_candidates": len(cands), "objective_best": float(min(objs)), "objective_worst": float(max(objs))}
-    return dict(before=before, after=after, skeleton=skeleton, sk_nodes=sk_nodes, anchored=set(anchors), entrance_points=ent_pts, outline=outline, gt=gt_b, res=res, plan=plan, plan_b=plan_b, row=row, ind_b=ind_b, ind_a=ind_a)
+    return dict(floor_id=fid, before=before, after=after, skeleton=skeleton, sk_nodes=sk_nodes, anchored=set(anchors), entrance_points=ent_pts, outline=outline, gt=gt_b, res=res, plan=plan, plan_b=plan_b, row=row, ind_b=ind_b, ind_a=ind_a)
 
 
 __all__ = ["BETTER", "TOPO_KEYS", "TOPO_LABEL", "build_generator", "existing_entrances", "make_score_fn", "renovate_floor", "renovation_objective", "select_floors", "topo_indicators"]
