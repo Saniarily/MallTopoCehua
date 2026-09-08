@@ -20,9 +20,9 @@ tab_new, tab_jobs, tab_results, tab_ckpt, tab_export = st.tabs(["新建任务", 
 # --------------------------------------------------------------------------------------------------------- new job
 with tab_new:
     st.markdown("所有任务以 **后台子进程** 运行（`outputs/jobs/<id>/log.txt`），关闭页面不会中断；可在下一页查看状态、日志、曲线，或停止。")
-    kind = st.selectbox("任务类型", ["train_stage1", "ablation", "evaluate_stage1", "train_stage2", "evaluate_stage2", "evaluate_stage3", "renovate", "figures", "custom"],
+    kind = st.selectbox("任务类型", ["train_stage1", "ablation", "evaluate_stage1", "train_stage2", "evaluate_stage2", "evaluate_stage3", "renovate", "floor_plates", "figures", "custom"],
                         format_func=lambda k: {"train_stage1": "阶段一 训练排序器", "ablation": "阶段一 消融 / 模型对比（多 seed）", "evaluate_stage1": "阶段一 评估 checkpoint", "train_stage2": "阶段二 训练 AR-GNN",
-                                               "evaluate_stage2": "阶段二 评估生成器", "evaluate_stage3": "阶段三 走廊自适应评估", "renovate": "阶段三 旧商场改造批量实验", "figures": "生成论文图表", "custom": "自定义命令"}[k])
+                                               "evaluate_stage2": "阶段二 评估生成器", "evaluate_stage3": "阶段三 走廊自适应评估", "renovate": "阶段三 旧商场改造批量实验", "floor_plates": "导出全部真实平面图（色块+拓扑 / 轮廓+拓扑 / 缩略图）", "figures": "生成论文图表", "custom": "自定义命令"}[k])
     args: dict = {}
     label = st.text_input("任务标签", value=kind)
     ov_text = ""
@@ -65,6 +65,13 @@ with tab_new:
         args["low_score"] = ls if ls > 0 else None
         args["no_filter"] = st.checkbox("关闭楼层筛选（面积 / 节点数 / 出入口 / 楼层）", False)
         args["out"] = st.text_input("输出目录", "outputs/experiments/renovation_ui")
+    elif kind == "floor_plates":
+        args["config"] = st.selectbox("数据配置", list_configs("data"), index=list_configs("data").index("configs/data/legacy.yaml") if "configs/data/legacy.yaml" in list_configs("data") else 0)
+        args["out"] = st.text_input("输出目录", "outputs/floor_plates")
+        args["workers"] = st.number_input("并行进程", 1, 16, 4)
+        args["limit"] = st.number_input("楼层上限（0 = 全部）", 0, 5000, 0) or None
+        args["force"] = st.checkbox("覆盖已有图片", False)
+        st.caption("生成 plan_topo/（功能色块平面 + 全部 M 节点拓扑）、outline_topo/（轮廓 + 拓扑）、thumbs/（360 px 缩略图，改造页直接读取）与 floors.csv；可断点续跑。")
     elif kind == "figures":
         only = st.text_input("只生成（空格分隔，如 F09 R15；留空 = 全部）", "")
         args["only"] = only.split() or None
@@ -154,27 +161,51 @@ with tab_results:
             if pq is not None:
                 with st.expander(f"逐查询 / 逐样本结果（{len(pq)} 行）"):
                     st.dataframe(pq, width="stretch")
-        rec = reg.get(sel[0]) if sel else None
-        if rec is not None:
-            pngs = sorted(rec.path.glob("*.png"))
-            if pngs:
-                st.markdown(f"**结果图**（{len(pngs)} 张）")
-                g1, g2, g3 = st.columns([1, 1, 3])
-                per_page = g1.selectbox("每页", [6, 12, 24, 48], index=1)
-                n_pages = max(1, (len(pngs) + per_page - 1) // per_page)
-                page = g2.number_input("页", 1, n_pages, 1) if n_pages > 1 else 1
-                pick = g3.selectbox("或直接查看单张", ["（全部）", *[p.name for p in pngs]])
-                if pick != "（全部）":
-                    p1 = rec.path / pick
-                    st.image(str(p1), caption=p1.name, width="stretch")
-                    st.download_button("下载", p1.read_bytes(), p1.name, "image/png", key=f"dlpng_{p1.name}")
+        if sel:
+            st.markdown("---")
+            recs = {n: reg.get(n) for n in sel}
+            png_sets = {n: {p.name: p for p in sorted(r.path.glob("*.png"))} for n, r in recs.items() if r is not None}
+            png_sets = {n: v for n, v in png_sets.items() if v}
+            if png_sets:
+                mode = st.radio("结果图", ["按实验浏览", "同一楼层跨批次对比"], horizontal=True, key="res_img_mode")
+                if mode == "按实验浏览":
+                    which = st.selectbox("实验", list(png_sets), index=list(png_sets).index(one) if one in png_sets else 0, key="res_img_exp")
+                    pngs = list(png_sets[which].values())
+                    st.markdown(f"**{which}**（{len(pngs)} 张）")
+                    g1, g2, g3 = st.columns([1, 1, 3])
+                    per_page = g1.selectbox("每页", [6, 12, 24, 48], index=1)
+                    n_pages = max(1, (len(pngs) + per_page - 1) // per_page)
+                    page = g2.number_input("页", 1, n_pages, 1) if n_pages > 1 else 1
+                    pick = g3.selectbox("或直接查看单张", ["（全部）", *[p.name for p in pngs]])
+                    if pick != "（全部）":
+                        p1 = png_sets[which][pick]
+                        st.image(str(p1), caption=f"{which} / {p1.name}", width="stretch")
+                        st.download_button("下载", p1.read_bytes(), f"{which.replace('/', '_')}_{p1.name}", "image/png", key=f"dlpng_{which}_{p1.name}")
+                    else:
+                        ncol = 2 if per_page <= 6 else 3
+                        sub = pngs[(page - 1) * per_page: page * per_page]
+                        for r0 in range(0, len(sub), ncol):
+                            cols = st.columns(ncol)
+                            for col, p1 in zip(cols, sub[r0:r0 + ncol]):
+                                col.image(str(p1), caption=p1.name, width="stretch")
                 else:
-                    ncol = 2 if per_page <= 6 else 3
-                    sub = pngs[(page - 1) * per_page: page * per_page]
-                    for r0 in range(0, len(sub), ncol):
-                        cols = st.columns(ncol)
-                        for col, p1 in zip(cols, sub[r0:r0 + ncol]):
-                            col.image(str(p1), caption=p1.name, width="stretch")
+                    common = sorted(set.intersection(*[set(v) for v in png_sets.values()])) if len(png_sets) > 1 else sorted(next(iter(png_sets.values())))
+                    if not common:
+                        st.info("所选实验之间没有同名结果图（不同楼层集合）。")
+                    else:
+                        st.caption(f"{len(common)} 个楼层在所选 {len(png_sets)} 个实验中都有结果图；每行一个楼层，每列一个实验（按上方「对比实验」顺序）")
+                        fl = st.selectbox("楼层图", ["（逐页浏览）", *common], key="res_cmp_floor")
+                        show = [fl] if fl != "（逐页浏览）" else None
+                        if show is None:
+                            per_page = st.selectbox("每页楼层数", [3, 5, 10], index=0, key="res_cmp_pp")
+                            n_pages = max(1, (len(common) + per_page - 1) // per_page)
+                            page = st.number_input("页", 1, n_pages, 1, key="res_cmp_page") if n_pages > 1 else 1
+                            show = common[(page - 1) * per_page: page * per_page]
+                        for name in show:
+                            st.markdown(f"**{name}**")
+                            cols = st.columns(len(png_sets))
+                            for col, (exp, files) in zip(cols, png_sets.items()):
+                                col.image(str(files[name]), caption=exp, width="stretch")
 
 # --------------------------------------------------------------------------------------------------------- checkpoints
 with tab_ckpt:

@@ -272,6 +272,22 @@ sharp wedges and a wider corridor share than the built floors – to be addresse
 clear ring) → `BETTER["num_cycles"] = 0`, objective only guards against losing > 50 % of the existing loops and adds a
 closeness-drop penalty; (b) the renovation UI lists **all** floors with a thumbnail of the existing plan, the filter is optional.
 
+### Renovation v2b (Mac, 2026-09-08; same 40 floors, objective with cycle count neutral + closeness-drop penalty)
+| indicator | before | after | improved floors (v2 → v2b) |
+|---|---|---|---|
+| Stage-1 predicted score | 0.568 | 0.575 | 62.5 → **65.0 %** |
+| avg shortest path | 4.97 | 4.76 | 85.0 → 85.0 % |
+| diameter | 12.1 | 11.3 | 55.0 → **57.5 %** |
+| closeness (integration) | 0.226 | 0.235 | 87.5 → **92.5 %** |
+| max betweenness | 0.381 | 0.378 | 55.0 → 55.0 % |
+| dead ends | 5.8 | 4.9 | 57.5 → 47.5 % |
+| cycles (neutral) | 11.0 | 9.2 | – |
+| sharp-angle rate / corridor ratio (plan) | 0.089 / 0.199 | 0.173 / 0.277 | cost (slightly lower than v2) |
+| planar rate | – | 87.5 % | (v2 90 %) |
+
+Dropping the "more loops" pressure lets the optimiser trade small loops for integration: closeness and predicted score
+improve on more floors, dead-end improvement rate drops (the loop term no longer forces cul-de-sacs to close).
+
 ### Stage-3 fix: corridors leaving non-convex outlines (2026-09-08)
 Hand-drawn L / U outlines in the Viewer Hub produced corridors cutting across the re-entrant corner although every node was
 inside (node containment ≠ edge containment). `CorridorFitter` now tests **edge** containment against the building outline
@@ -289,3 +305,10 @@ union (`*_total.csv` polygons, which must fill the floor plate) with the mask; i
 `corridor_polygons_from_total_csv`) go through `Outline.csv_px_to_m`. Synthetic check on the fixture floor: shifted mask
 (−30, −40 px) inside-rate 0.76 → 1.00, rescaled ×1.15 0.00 → 1.00, shift + scale ×0.9 0.00 → 1.00, aligned mask keeps identity
 (unit test). UI 1 prints the alignment and warns when nodes remain outside (then CSV and mask are different regions).
+
+### Floor-plate export (2026-09-08)
+`scripts/export_floor_plates.py --config configs/data/legacy.yaml --out outputs/floor_plates --workers 4` writes, for every
+floor with graph CSVs, `plan_topo/<floor>.png` (colour-block plan + full M network, skeleton bold), `outline_topo/<floor>.png`
+(outline + network) and `thumbs/<floor>.png` (360 px square), plus `floors.csv` (nodes, edges, skeleton size, area, façade
+entrances, nodes outside the outline, CSV↔mask alignment, plan availability). Resumable, parallel. The Viewer Hub renovation
+picker reads `thumbs/` and `floors.csv` directly (instant) and falls back to on-the-fly rendering (~0.5 s / floor) when absent.

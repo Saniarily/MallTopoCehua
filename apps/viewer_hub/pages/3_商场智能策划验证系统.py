@@ -202,6 +202,12 @@ with tab_reno:
         floors = []
     else:
         st.markdown(f"**候选楼层：全部 {len(all_ids)} 个可达楼层**（可选按条件筛选推荐）")
+        from mall_space_planner.hub.plates import DEFAULT_PLATES_DIR
+        n_pre = len(list((DEFAULT_PLATES_DIR / "thumbs").glob("*.png"))) if (DEFAULT_PLATES_DIR / "thumbs").exists() else 0
+        if n_pre == 0:
+            st.info("尚无预渲染缩略图：缩略图将即时绘制（每张约 0.5 s，首次较慢）。建议在「训练与实验管理中心 → 新建任务 → 导出全部真实平面图」后台生成一次，之后秒开。", icon="💡")
+        else:
+            st.caption(f"预渲染缩略图 {n_pre} 张（outputs/floor_plates/thumbs）")
         use_filter = st.toggle("只显示推荐楼层（节点数 / 面积 / 有出入口 / 首层或二层 / 低分）", value=False)
         if use_filter:
             r1, r2, r3, r4 = st.columns(4)

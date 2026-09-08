@@ -28,7 +28,7 @@ DEFAULT_JOBS_DIR = ROOT / "outputs" / "jobs"
 
 @dataclass
 class JobSpec:
-    kind: str  # train_stage1 | train_stage2 | evaluate_stage1 | evaluate_stage2 | evaluate_stage3 | ablation | renovate | figures | custom
+    kind: str  # train_stage1 | train_stage2 | evaluate_stage1 | evaluate_stage2 | evaluate_stage3 | ablation | renovate | floor_plates | figures | custom
     args: dict[str, Any] = field(default_factory=dict)
     label: str = ""
 
@@ -78,6 +78,14 @@ class JobSpec:
             cmd = [py, "scripts/run_ablation.py", "--config", a["config"]]
             if a.get("out_dir"):
                 cmd += ["--out-dir", a["out_dir"]]
+        elif self.kind == "floor_plates":
+            cmd = [py, "scripts/export_floor_plates.py", "--out", a.get("out", "outputs/floor_plates"), "--workers", str(a.get("workers", 4))]
+            if a.get("config"):
+                cmd += ["--config", a["config"]]
+            if a.get("force"):
+                cmd += ["--force"]
+            if a.get("limit"):
+                cmd += ["--limit", str(a["limit"])]
         elif self.kind == "figures":
             cmd = [py, "scripts/make_thesis_report.py"]
             if a.get("only"):
