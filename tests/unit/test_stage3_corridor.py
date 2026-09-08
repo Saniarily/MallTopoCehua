@@ -162,3 +162,26 @@ def test_renovation_mode_anchors_skeleton_and_regrows():
     assert r["plan"].diagnostics["n_entrances"] >= 2
     assert r["plan"].diagnostics["main_width_m"] > r["plan"].diagnostics["secondary_width_m"]
     assert all(k in r["ind_a"] for k in ("num_cycles", "avg_shortest_path", "closeness_mean", "n_dead_ends"))
+
+
+def test_nonconvex_outline_keeps_corridors_inside():
+    """L-shaped outline: no corridor may cut across the re-entrant corner (nodes inside is not enough)."""
+    import networkx as nx
+    import numpy as np
+
+    from mall_space_planner.schemas import TopologyGraph
+    from mall_space_planner.stage3 import CorridorFitter, FitParams
+    from mall_space_planner.stage3.fit import edges_outside
+    from mall_space_planner.stage3.outline import outline_from_points
+
+    outline = outline_from_points([(0, 0), (140, 0), (140, 90), (70, 90), (70, 55), (0, 55)])
+    g = nx.Graph()
+    ring = [f"S{i}" for i in range(8)]
+    g.add_edges_from(zip(ring, ring[1:] + ring[:1]))
+    for i in range(10):  # branches / chords crossing the notch when laid out naively
+        g.add_edge(f"N{i}", ring[i % 8]); g.add_edge(f"N{i}", ring[(i + 3) % 8])
+    topo = TopologyGraph(adjacency={v: sorted(g.neighbors(v)) for v in g.nodes})
+    res = CorridorFitter(FitParams(n_restarts=2, iters=40)).fit(topo, outline, seed=0, skeleton_nodes=set(ring))
+    pos = {k: np.asarray(v) for k, v in res.positions.items()}
+    assert res.diagnostics["edges_outside"] == 0
+    assert edges_outside(g, pos, outline.polygon) == 0

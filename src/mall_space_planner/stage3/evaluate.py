@@ -74,6 +74,9 @@ def evaluate_fit(topology: TopologyGraph, res: FitResult, plan: CorridorPlan, ou
     out = dict(res.diagnostics)
     out["crossings"] = count_crossings(g, pos)
     out["inside_ratio"] = float(np.mean([site.contains(Point(p)) or site.touches(Point(p)) for p in pos.values()]))
+    from mall_space_planner.stage3.fit import edges_outside
+
+    out["edges_outside"] = int(edges_outside(g, pos, site))  # corridors leaving the floor plate (non-convex outlines)
     lens = [float(np.linalg.norm(pos[u] - pos[v])) for u, v in g.edges]
     out["mean_edge_length_m"] = float(np.mean(lens)) if lens else 0.0
     out["min_edge_length_m"] = float(np.min(lens)) if lens else 0.0

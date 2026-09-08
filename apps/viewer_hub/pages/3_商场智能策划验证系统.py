@@ -196,22 +196,59 @@ with tab_new:
 # ==================================================================================================== RENOVATION
 with tab_reno:
     st.markdown("保留既有商场 **轮廓与出入口位置**，以阶段一骨架为原型重新生长完整关键点网络并重排所有节点，得到走廊方案；对比现状 / 更新的关键拓扑指标与阶段一预测评分。")
-    r1, r2, r3, r4 = st.columns(4)
-    low = r1.number_input("仅低分楼层（评分 ≤，0 = 不限）", 0.0, 100.0, 0.0, 0.1)
-    min_nodes = r2.number_input("最少节点数", 4, 100, 12)
-    min_area = r3.number_input("最小面积 m²", 500.0, 50000.0, 6000.0, 500.0)
-    limit = r4.number_input("候选楼层上限", 1, 500, 40)
-    if st.button("筛选可改造楼层（首层 / 有出入口的二层优先）"):
-        S["ui3_floors"] = wb.renovation_floors(low or None, int(limit), int(min_nodes), float(min_area))
-    floors = S.get("ui3_floors")
-    if floors is None:
-        floors = wb.renovation_floors(None, 40)
-        S["ui3_floors"] = floors
-    if not floors:
+    all_ids = wb.renovation_floor_ids()
+    if not all_ids:
         st.warning("没有可达的真实图 CSV（需要 legacy graph_dir，Mac 上可用）；沙盒仅含测试夹具楼层。")
+        floors = []
     else:
-        manual = st.text_input("或直接输入楼层 ID（覆盖筛选）", "")
-        fid = manual.strip() or st.selectbox("楼层", floors)
+        st.markdown(f"**候选楼层：全部 {len(all_ids)} 个可达楼层**（可选按条件筛选推荐）")
+        use_filter = st.toggle("只显示推荐楼层（节点数 / 面积 / 有出入口 / 首层或二层 / 低分）", value=False)
+        if use_filter:
+            r1, r2, r3, r4 = st.columns(4)
+            low = r1.number_input("仅低分楼层（评分 ≤，0 = 不限）", 0.0, 100.0, 0.0, 0.1)
+            min_nodes = r2.number_input("最少节点数", 4, 100, 12)
+            min_area = r3.number_input("最小面积 m²", 500.0, 50000.0, 6000.0, 500.0)
+            pf = r4.multiselect("楼层号", [1, 2, 3, 4, 5, 6], default=[1, 2])
+            floors = wb.renovation_floors(low or None, 500, int(min_nodes), float(min_area), prefer_floors=tuple(pf) or None, require_entrance=True)
+            st.caption(f"推荐 {len(floors)} 个楼层")
+            if not floors:
+                st.info("没有楼层满足推荐条件；关闭开关可浏览全部楼层。")
+        else:
+            floors = all_ids
+        # metadata table + thumbnail gallery so the designer sees the plan, not only an id
+        key_tbl = ("ui3_floor_tbl", tuple(floors))
+        if S.get("ui3_floor_tbl_key") != key_tbl:
+            S["ui3_floor_tbl"] = pd.DataFrame(wb.renovation_floor_table(floors)); S["ui3_floor_tbl_key"] = key_tbl
+        tbl = S["ui3_floor_tbl"]
+        if len(tbl):
+            sort_by = st.selectbox("排序", [c for c in ["score", "area_m2", "n_nodes", "n_entrances", "floor_id"] if c in tbl.columns], index=0)
+            tbl = tbl.sort_values(sort_by, ascending=sort_by != "area_m2").reset_index(drop=True)
+            with st.expander(f"楼层列表（{len(tbl)}）", expanded=False):
+                st.dataframe(tbl, width="stretch", hide_index=True, height=min(360, 40 + 35 * len(tbl)))
+            page_n = 12
+            n_pages = max(1, (len(tbl) + page_n - 1) // page_n)
+            pg = st.number_input("缩略图页", 1, n_pages, 1) - 1 if n_pages > 1 else 0
+            sub = tbl.iloc[pg * page_n:(pg + 1) * page_n]
+            cols = st.columns(6)
+            for i, (_, rr) in enumerate(sub.iterrows()):
+                with cols[i % 6]:
+                    thumb = wb.floor_thumbnail(rr["floor_id"])
+                    if thumb:
+                        st.image(thumb, width="stretch")
+                    sc = f"评分 {rr['score']:.2f} · " if pd.notna(rr.get("score")) else ""
+                    st.caption(f"**{rr['floor_id']}**  \n{sc}{rr.get('layout_type') or ''}  \n{int(rr['n_nodes']) if pd.notna(rr.get('n_nodes')) else '?'} 节点 · {int(rr['area_m2']) if pd.notna(rr.get('area_m2')) else '?'} m² · {int(rr['n_entrances']) if pd.notna(rr.get('n_entrances')) else '?'} 出入口")
+                    if st.button("选择", key=f"pick_{rr['floor_id']}"):
+                        S["ui3_reno_fid"] = rr["floor_id"]
+        floors = tbl["floor_id"].tolist() if len(tbl) else floors
+    if floors:
+        default_fid = S.get("ui3_reno_fid") if S.get("ui3_reno_fid") in floors else floors[0]
+        fid = st.selectbox("楼层", floors, index=floors.index(default_fid), key="ui3_reno_select")
+        S["ui3_reno_fid"] = fid
+        pc1, pc2 = st.columns([1, 3])
+        with pc1:
+            th = wb.floor_thumbnail(fid, size=3.0, dpi=110)
+            if th:
+                st.image(th, caption=f"{fid} 现状", width="stretch")
         c1, c2, c3, c4 = st.columns(4)
         seed = c1.number_input("seed", 0, 100000, 0, key="reno_seed")
         ncand = c2.number_input("内部候选数（按改造目标择优）", 1, 16, 6)

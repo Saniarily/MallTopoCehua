@@ -301,6 +301,38 @@ def _boundary_point(poly: Polygon, p: np.ndarray) -> np.ndarray:
     return np.array([q.x, q.y])
 
 
+class _EdgeInsideChecker:
+    """Edge containment for **non-convex** insets (L / U / ring outlines): a corridor between two interior nodes may
+    still leave the floor plate across a re-entrant corner. Node containment alone does not catch this. For convex
+    insets every edge between inside nodes is inside, so the checker is a no-op there."""
+
+    def __init__(self, inset: Polygon, tol: float = 0.3) -> None:
+        from shapely.prepared import prep
+
+        self.concave = bool(inset.area < 0.985 * inset.convex_hull.area) or len(inset.interiors) > 0
+        self._prep = prep(inset.buffer(tol)) if self.concave else None
+
+    def edge_ok(self, a: np.ndarray, b: np.ndarray) -> bool:
+        if self._prep is None:
+            return True
+        if np.linalg.norm(a - b) < 1e-9:
+            return True
+        return bool(self._prep.covers(LineString([a, b])))
+
+    def node_ok(self, g: nx.Graph, pos: dict[str, np.ndarray], v: str) -> bool:
+        return self._prep is None or all(self.edge_ok(pos[v], pos[u]) for u in g.neighbors(v))
+
+    def bad_edges(self, g: nx.Graph, pos: dict[str, np.ndarray]) -> list[tuple[str, str]]:
+        if self._prep is None:
+            return []
+        return [(u, v) for u, v in g.edges if not self.edge_ok(pos[u], pos[v])]
+
+
+def edges_outside(g: nx.Graph, pos: dict[str, np.ndarray], poly: Polygon, tol: float = 0.3) -> int:
+    """Number of edges whose segment is not covered by ``poly`` (buffered by ``tol`` m)."""
+    return len(_EdgeInsideChecker(poly, tol).bad_edges(g, pos))
+
+
 def _snap_angle(d: np.ndarray, frame: list[float]) -> np.ndarray:
     """Rotate ``d`` to the closest frame direction (frame angles and their perpendiculars)."""
     L = np.linalg.norm(d)
@@ -375,8 +407,21 @@ class CorridorFitter:
         cover = self._coverage(g, pos, inset)
         # sharp wedges: share of node angles below min_angle (real floors: ≈ 0.13 below 60°)
         sharp = sharp_angle_rate(g, pos, self.p.min_angle_deg)
-        s = 3.0 * (1 - inside) + 2.0 * cross + 0.8 * near_b + 0.5 * near_a + 0.8 * ortho + 2.0 * viol + 1.0 * (1 - cover) + 1.5 * sharp
-        return s, {"inside_ratio": inside, "crossings": cross, "outer_to_boundary_m": near_b * self.p.shop_depth, "branch_to_axis_m": near_a * self.p.shop_depth, "ortho_deviation_deg": ortho * 45.0, "spacing_violation_rate": viol, "served_area_ratio": cover, "sharp_angle_rate": sharp}
+        # edges leaving a non-convex inset across a re-entrant corner (L / U outlines) – as bad as a crossing
+        ec = self._edge_checker(inset)
+        e_out = len(ec.bad_edges(g, pos))
+        s = 3.0 * (1 - inside) + 2.0 * cross + 2.0 * e_out + 0.8 * near_b + 0.5 * near_a + 0.8 * ortho + 2.0 * viol + 1.0 * (1 - cover) + 1.5 * sharp
+        return s, {"inside_ratio": inside, "crossings": cross, "edges_outside": e_out, "outer_to_boundary_m": near_b * self.p.shop_depth, "branch_to_axis_m": near_a * self.p.shop_depth, "ortho_deviation_deg": ortho * 45.0, "spacing_violation_rate": viol, "served_area_ratio": cover, "sharp_angle_rate": sharp}
+
+    def _edge_checker(self, inset: Polygon) -> _EdgeInsideChecker:
+        """Edge containment is tested against the **site outline** (shrunk by half a corridor width), not the inset:
+        a corridor between the inset and the façade is still inside the building, but one that cuts across a
+        re-entrant corner of an L / U outline is not. Falls back to the inset when ``fit`` has not set the site."""
+        region = getattr(self, "_site_region", None)
+        key = (id(inset), id(region))
+        if getattr(self, "_ec_key", None) != key:
+            self._ec_key, self._ec = key, _EdgeInsideChecker(region if region is not None else inset)
+        return self._ec
 
     def _coverage(self, g: nx.Graph, pos: dict[str, np.ndarray], inset: Polygon, n_grid: int = 24) -> float:
         key = id(inset)
@@ -413,6 +458,7 @@ class CorridorFitter:
         nodes = list(g.nodes)
         pos = {k: v.copy() for k, v in pos.items()}
         checker = _NodeCrossChecker(g)
+        ec = self._edge_checker(inset)
         # renovation: existing entrance positions (projected onto the inset boundary) that the leaves should reach
         tgt_pts = [_project_inside(np.asarray(t, float), inset) for t in (entrance_targets or [])]
         leaves = [v for v in nodes if g.degree(v) == 1 and v not in fixed]
@@ -534,14 +580,69 @@ class CorridorFitter:
                 full = disp[v] * p.step * (0.4 + 0.6 * T)
                 if np.linalg.norm(full) < 1e-9:
                     continue
+                was_ok = ec.node_ok(g, pos, v)  # never make an edge leave the inset; allow moves that repair one
                 for frac in (1.0, 0.5, 0.25, 0.125):
                     pos[v] = _project_inside(old + full * frac, inset)
                     Pcur[i] = pos[v]
-                    if not checker.crosses(pos, v, Pcur):
+                    if not checker.crosses(pos, v, Pcur) and (not was_ok or ec.node_ok(g, pos, v)):
                         break
                 else:
                     pos[v] = old
                     Pcur[i] = old
+        return pos
+
+    def repair_outside(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], rng: np.random.RandomState, passes: int = 4, n_random: int = 24, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
+        """Move endpoints of edges that leave a non-convex inset (across a re-entrant corner) to positions where the
+        edge is inside again, without adding crossings: candidates are the neighbour barycentre, points along the
+        edges to neighbours, the nearest medial-axis points, a ring around the barycentre and random inset points."""
+        ec = self._edge_checker(inset)
+        if not ec.concave:
+            return pos
+        pos = {k: v.copy() for k, v in pos.items()}
+        minx, miny, maxx, maxy = inset.bounds
+
+        def cost(P: dict[str, np.ndarray]) -> tuple[int, int]:
+            return len(ec.bad_edges(g, P)), count_crossings(g, P)
+
+        for _ in range(passes):
+            bad = ec.bad_edges(g, pos)
+            if not bad:
+                break
+            cnt: dict[str, int] = {}
+            for u, v in bad:
+                cnt[u] = cnt.get(u, 0) + 1; cnt[v] = cnt.get(v, 0) + 1
+            order = sorted((v for v in cnt if not fixed or v not in fixed), key=lambda v: (roles[v] == "outer", -cnt[v]))
+            for v in order:
+                cur = cost(pos)
+                if cur[0] == 0:
+                    break
+                nb = list(g.neighbors(v))
+                cands: list[np.ndarray] = []
+                if nb:
+                    bary = np.mean([pos[u] for u in nb], axis=0)
+                    cands.append(bary)
+                    for u in nb:
+                        for t in (0.25, 0.5, 0.75):
+                            cands.append(pos[v] + (pos[u] - pos[v]) * t)
+                    r0 = 0.5 * float(np.mean([np.linalg.norm(pos[u] - pos[v]) for u in nb]) + 1e-9)
+                    for ang in np.linspace(0, 2 * np.pi, 12, endpoint=False):
+                        cands.append(bary + r0 * np.array([np.cos(ang), np.sin(ang)]))
+                if lines:
+                    cands.append(np.array(nearest_on_lines(lines, tuple(pos[v]))))
+                    for u in nb:
+                        cands.append(np.array(nearest_on_lines(lines, tuple((pos[u] + pos[v]) / 2))))
+                for _k in range(n_random):
+                    cands.append(np.array([rng.uniform(minx, maxx), rng.uniform(miny, maxy)]))
+                old = pos[v]
+                best = (cur, old)
+                for c in cands:
+                    pos[v] = _project_inside(c, inset)
+                    k = cost(pos)
+                    if k[1] <= cur[1] and k < best[0]:  # fewer outside edges, never more crossings
+                        best = (k, pos[v])
+                        if k[0] == 0:
+                            break
+                pos[v] = best[1]
         return pos
 
     def repair_crossings(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, rng: np.random.RandomState, passes: int = 3, n_random: int = 12, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
@@ -580,12 +681,13 @@ class CorridorFitter:
                     for ang in np.linspace(0, 2 * np.pi, 8, endpoint=False):
                         cands.append(bary + r0 * np.array([np.cos(ang), np.sin(ang)]))
                 old = pos[v]
+                ec = self._edge_checker(inset)
                 best = (cur, old)
                 for c in cands:
                     c = _project_inside(c, inset)
                     pos[v] = c
                     k = count_crossings(g, pos)
-                    if k < best[0]:
+                    if k < best[0] and ec.node_ok(g, pos, v):
                         best = (k, c)
                         if k == 0:
                             break
@@ -600,6 +702,7 @@ class CorridorFitter:
         p = self.p
         pos = {k: v.copy() for k, v in pos.items()}
         checker = _NodeCrossChecker(g)
+        ec = self._edge_checker(inset)
         nodes = list(g.nodes)
         nid = {v: i for i, v in enumerate(nodes)}
         target = np.radians(p.min_angle_deg)
@@ -635,7 +738,7 @@ class CorridorFitter:
                                 old = pos[m]
                                 pos[m] = cand
                                 Pcur = np.array([pos[n] for n in nodes])
-                                ok = not checker.crosses(pos, m, Pcur) and sharp_angle_rate(g, pos, p.min_angle_deg) < before
+                                ok = not checker.crosses(pos, m, Pcur) and ec.node_ok(g, pos, m) and sharp_angle_rate(g, pos, p.min_angle_deg) < before
                                 if ok:
                                     moved += 1
                                     break
@@ -660,7 +763,7 @@ class CorridorFitter:
                 cand = corners[i] + (inset.centroid.coords[0] - corners[i]) * 0.02
                 old = pos[v]
                 pos[v] = cand
-                if any(_seg_cross(pos[v], pos[u], pos[a], pos[b]) for u in g.neighbors(v) for a, b in g.edges if v not in (a, b) and u not in (a, b)):
+                if any(_seg_cross(pos[v], pos[u], pos[a], pos[b]) for u in g.neighbors(v) for a, b in g.edges if v not in (a, b) and u not in (a, b)) or not self._edge_checker(inset).node_ok(g, pos, v):
                     pos[v] = old
                 else:
                     used.add(i)
@@ -683,6 +786,8 @@ class CorridorFitter:
         rng = np.random.RandomState(seed)
         depth = effective_depth(outline, p.shop_depth, p.depth_frac, p.depth_area_coef)
         inset = inset_region(outline, depth)
+        site_region = outline.polygon.buffer(-1.0).buffer(0)  # half a corridor width inside the façade
+        self._site_region = site_region if not site_region.is_empty and site_region.geom_type == "Polygon" else outline.polygon
         fixed_pos = {v: np.asarray(xy, float) for v, xy in sorted((anchors or {}).items()) if v in g.nodes}
         fixed = set(fixed_pos)
         g = nx.Graph(); g.add_nodes_from(sorted(to_networkx(topology).nodes)); g.add_edges_from(sorted(tuple(sorted(e)) for e in to_networkx(topology).edges))  # deterministic order (str hashing is randomised per process)
@@ -715,9 +820,17 @@ class CorridorFitter:
         best = None
         for s0, pos0 in pool:
             pos0 = self.repair_crossings(g, pos0, roles, inset, rng, fixed=fixed)  # planar start (relax never introduces crossings)
+            pos0 = self.repair_outside(g, pos0, roles, inset, lines, rng, fixed=fixed)  # edges inside a non-convex inset (relax keeps them inside)
             pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng, fixed=fixed, entrance_targets=tg)
             pos1 = self.snap_corners(g, pos1, roles, inset, fixed=fixed)
             pos1 = self.open_angles(g, pos1, roles, inset, fixed=fixed)
+            ec = self._edge_checker(inset)
+            for _rep in range(2):  # non-convex outline: edges across a re-entrant corner (repair may need a re-relax)
+                if not ec.bad_edges(g, pos1):
+                    break
+                pos1 = self.repair_outside(g, pos1, roles, inset, lines, rng, fixed=fixed)
+                if ec.bad_edges(g, pos1):
+                    pos1 = self.relax(g, pos1, roles, inset, lines, frame, rng, fixed=fixed, entrance_targets=tg)
             if count_crossings(g, pos1):
                 pos1 = self.repair_crossings(g, pos1, roles, inset, rng, passes=6 if fixed else 3, n_random=48 if fixed else 12, fixed=fixed)
                 if fixed and count_crossings(g, pos1):  # anchored edges cannot move: re-relax the new nodes from the repaired start

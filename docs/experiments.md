@@ -246,4 +246,35 @@ dead ends 2.8 → 3.2, sharp 0.10 → 0.18, planar 52.5%. Designer review: ancho
 almost unchanged, and many selected floors were tiny (6–10 nodes) or without entrances → renovation v2: anchor only the
 existing entrances (dead ends near the façade; fallback = façade-nearest loop nodes), re-lay-out everything else, Stage-1
 predicted score of the topology in the candidate objective, floor filter (≥ 12 nodes, ≥ 6000 m², floors 1–2 with an entrance,
-optional score threshold). **待运行**: `python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.5 --limit 40 --out outputs/experiments/renovation_v2`.
+optional score threshold).
+
+### Renovation v2 (Mac, 2026-09-08; 40 filtered low-score test floors, AR-GNN + 16, **entrances only anchored**, Stage-1 score in objective)
+`python scripts/renovate_stage3.py --config configs/data/legacy.yaml --split test --low-score 4.5 --limit 40 --out outputs/experiments/renovation_v2` → status ok 40/40, planar 90%.
+
+| indicator | before | after | improved floors |
+|---|---|---|---|
+| Stage-1 predicted score | 0.568 | 0.574 | 62.5% |
+| avg shortest path | 4.97 | 4.74 | **85.0%** |
+| diameter | 12.1 | 11.4 | 55.0% |
+| closeness (integration) | 0.226 | 0.235 | **87.5%** |
+| max betweenness | 0.381 | 0.380 | 55.0% |
+| dead ends | 5.8 | 4.5 | 57.5% |
+| cycles (neutral, reported only) | 11.0 | 9.7 | – |
+| degree entropy (neutral) | 1.16 | 1.10 | – |
+| sharp-angle rate (plan) | 0.089 | 0.180 | cost |
+| corridor ratio (plan) | 0.199 | 0.279 | cost |
+| entrances / atria (plan) | 5.2 / 1.3 | 5.7 / 2.0 | – |
+
+Versus v1: ASPL improvement rate 67.5 → 85%, closeness 70 → 87.5%, planar rate 52.5 → 90%, dead ends now decrease (v1 increased);
+the regrown topology is visibly different from the existing one (F09 / per-floor PNGs). Costs: the plan renderer produces more
+sharp wedges and a wider corridor share than the built floors – to be addressed with the corridor-morphology statistics.
+**Designer decisions after review**: (a) the cycle count is *not* an improvement direction (many small loops ≠ better than a
+clear ring) → `BETTER["num_cycles"] = 0`, objective only guards against losing > 50 % of the existing loops and adds a
+closeness-drop penalty; (b) the renovation UI lists **all** floors with a thumbnail of the existing plan, the filter is optional.
+
+### Stage-3 fix: corridors leaving non-convex outlines (2026-09-08)
+Hand-drawn L / U outlines in the Viewer Hub produced corridors cutting across the re-entrant corner although every node was
+inside (node containment ≠ edge containment). `CorridorFitter` now tests **edge** containment against the building outline
+(inset by 1 m) in relax / crossing repair / angle opening / corner snapping, adds `repair_outside()` after init and after
+relax, and scores `2 × edges_outside`; `evaluate_fit` reports `edges_outside`. Sandbox check (3 seeds each): L outline
+2 / 1 / 0 → 0 / 0 / 0 outside edges, U outline 3 / 2 / 3 → 0 / 0 / 0, crossings unchanged at 0; fixture renovation still 0 crossings.

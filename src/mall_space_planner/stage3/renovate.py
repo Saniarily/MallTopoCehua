@@ -18,7 +18,8 @@ from mall_space_planner.topology.metrics import compute_topology_metrics
 TOPO_KEYS = ["num_nodes", "num_edges", "num_cycles", "avg_degree", "avg_shortest_path", "diameter", "clustering", "degree_entropy", "max_betweenness", "n_components"]
 TOPO_LABEL = {"pred_score": "阶段一预测评分", "num_nodes": "节点数", "num_edges": "连接数", "num_cycles": "回路数", "avg_degree": "平均连接度", "avg_shortest_path": "平均步行路径", "diameter": "拓扑直径",
               "clustering": "聚类系数", "degree_entropy": "连接度熵", "max_betweenness": "最大介数", "n_components": "连通分量", "n_dead_ends": "断头节点", "closeness_mean": "平均接近中心性（整合度）"}
-BETTER = {"pred_score": +1, "num_cycles": +1, "avg_shortest_path": -1, "diameter": -1, "max_betweenness": -1, "n_dead_ends": -1, "closeness_mean": +1, "degree_entropy": 0, "clustering": 0, "avg_degree": 0, "n_components": -1, "num_nodes": 0, "num_edges": 0}
+BETTER = {"pred_score": +1, "num_cycles": 0,  # cycle count is reported but is NOT an improvement direction (designer decision): more loops is not better per se
+           "avg_shortest_path": -1, "diameter": -1, "max_betweenness": -1, "n_dead_ends": -1, "closeness_mean": +1, "degree_entropy": 0, "clustering": 0, "avg_degree": 0, "n_components": -1, "num_nodes": 0, "num_edges": 0}
 
 
 def topo_indicators(topo) -> dict:  # noqa: ANN001
@@ -82,13 +83,17 @@ def build_generator(results: Path | None):  # noqa: ANN201
 
 def renovation_objective(before_ind: dict, cand, score_fn=None) -> float:  # noqa: ANN001
     """Lower is better. A renovation must not lose circulation quality: penalise interior dead ends (beyond the existing
-    entrances), fewer loops than the existing network, longer average walking paths, extra components; when a Stage-1
+    entrances), losing more than half of the existing loops, longer average walking paths, lower integration
+    (closeness), extra components; when a Stage-1
     ``score_fn(topology) -> predicted score`` is given, reward a higher predicted score (weight 4 per score point)."""
     ind = topo_indicators(cand)
     dead = max(0, ind["n_dead_ends"] - before_ind["n_dead_ends"])
-    loops = max(0.0, (before_ind["num_cycles"] - ind["num_cycles"]) / max(before_ind["num_cycles"], 1))
+    # loops: only guard against losing *most* of the circulation loops (< 50 % of the existing count); the cycle count
+    # itself is neutral – a grid with many small loops is not better than a clear ring (designer feedback)
+    loops = max(0.0, (0.5 * before_ind["num_cycles"] - ind["num_cycles"]) / max(before_ind["num_cycles"], 1))
     aspl = max(0.0, (ind["avg_shortest_path"] - before_ind["avg_shortest_path"]) / max(before_ind["avg_shortest_path"], 1e-9))
-    obj = 1.0 * dead + 3.0 * loops + 3.0 * aspl + 2.0 * max(0, ind["n_components"] - 1)
+    closeness = max(0.0, (before_ind["closeness_mean"] - ind["closeness_mean"]) / max(before_ind["closeness_mean"], 1e-9))
+    obj = 1.0 * dead + 3.0 * loops + 3.0 * aspl + 2.0 * closeness + 2.0 * max(0, ind["n_components"] - 1)
     if score_fn is not None:
         try:
             obj -= 4.0 * float(score_fn(cand))
