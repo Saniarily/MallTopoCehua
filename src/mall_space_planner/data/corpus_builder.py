@@ -60,8 +60,24 @@ class CorpusStats:
         return asdict(self)
 
 
+def read_csv_robust(path: Path) -> pd.DataFrame:
+    """CSV with unknown delimiter. ``sep=None`` (csv.Sniffer) fails on very short files (one data row) – fall back to
+    trying the usual delimiters and keeping the first that yields more than one column."""
+    try:
+        return pd.read_csv(path, sep=None, engine="python")
+    except Exception:  # noqa: BLE001
+        for sep in (",", ";", "\t", "|"):
+            try:
+                df = pd.read_csv(path, sep=sep)
+            except Exception:  # noqa: BLE001
+                continue
+            if df.shape[1] > 1:
+                return df
+        return pd.read_csv(path)
+
+
 def _read_edges(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, sep=None, engine="python")
+    df = read_csv_robust(path)
     if not {"Source", "Target"}.issubset(df.columns):
         raise ValueError(f"{path}: expected Source/Target columns, got {list(df.columns)}")
     df["Source"] = df["Source"].astype(str).str.strip()

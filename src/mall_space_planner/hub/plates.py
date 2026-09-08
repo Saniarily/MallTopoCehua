@@ -41,16 +41,25 @@ def load_floor(fid: str, ds, gd: Path | None = None) -> dict[str, Any]:  # noqa:
     return {"full": full, "skeleton": sk, "positions": gt, "outline": outline, "plan_png": ds.paths.plan_png(fid, 0), "graph_dir": gd}
 
 
-def _plan_background(ax, outline, plan_png: Path | None, alpha: float = 0.95) -> bool:  # noqa: ANN001
+def _soften(img: np.ndarray, saturation: float = 0.55, lighten: float = 0.18) -> np.ndarray:
+    """Desaturate and lighten the colour-block plan so the black network on top stays legible."""
+    f = img.astype(np.float32) / 255.0
+    grey = f @ np.array([0.299, 0.587, 0.114], np.float32)
+    f = grey[..., None] + saturation * (f - grey[..., None])
+    f = f + lighten * (1.0 - f)
+    return (np.clip(f, 0, 1) * 255).astype(np.uint8)
+
+
+def _plan_background(ax, outline, plan_png: Path | None, saturation: float = 0.55, lighten: float = 0.18) -> bool:  # noqa: ANN001
     if plan_png is None or not Path(plan_png).exists():
         return False
     try:
         from PIL import Image
 
-        img = np.asarray(Image.open(plan_png).convert("RGB"))
+        img = _soften(np.asarray(Image.open(plan_png).convert("RGB")), saturation, lighten)
         H, W = img.shape[:2]
         (x0, y0), (x1, y1) = outline.px_to_m(np.array([[0.0, 0.0], [float(W), float(H)]]))
-        ax.imshow(img, extent=(min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)), interpolation="bilinear", zorder=0, alpha=alpha)
+        ax.imshow(img, extent=(min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)), interpolation="bilinear", zorder=0)
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -63,8 +72,9 @@ def draw_plate(ax, rn: dict[str, Any], with_plan: bool, title: str = "", node_si
     if not used:
         poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=0.9)
     sk = set(rn["skeleton"].nodes) if rn.get("skeleton") is not None else set()
-    draw_network_in_outline(ax, rn["full"], rn["positions"], None, sk, node_size=node_size)
-    poly(ax, outline.polygon, fc="none", ec="#222", lw=1.0)
+    # ink (90 % black) network on the softened plan; orange network on the flat grey outline-only plate
+    draw_network_in_outline(ax, rn["full"], rn["positions"], None, sk, node_size=node_size, style="ink" if used else "orange")
+    poly(ax, outline.polygon, fc="none", ec="#333", lw=0.7, alpha=0.9)
     minx, miny, maxx, maxy = outline.polygon.bounds
     if square:
         cx, cy, half = (minx + maxx) / 2, (miny + maxy) / 2, 0.53 * max(maxx - minx, maxy - miny)
@@ -114,6 +124,7 @@ def render_floor_plates(fid: str, ds, out: Path, cases=None, force: bool = False
                 "n_entrances": int(sum(1 for v in g.nodes if g.degree(v) == 1 and v in gt and outline.polygon.exterior.distance(Point(gt[v])) <= 40.0)),
                 "nodes_outside": int(sum(1 for v in g.nodes if v in gt and not outline.polygon.buffer(1.0).covers(Point(gt[v])))),
                 "align_mode": al.get("mode"), "align_shift_px": json.dumps(al.get("shift_px")) if al else None, "align_scale": json.dumps(al.get("scale")) if al else None,
+                "outline_source": "total_csv" if outline.extra.get("outline_fallback") else ("mask" if "mask" in str(outline.source) or str(outline.source).endswith(".png") else "total_csv"),
                 "has_plan_png": bool(rn["plan_png"] is not None and Path(rn["plan_png"]).exists())})
     if not force and all(t.exists() for t in targets.values()):
         row["status"] = "exists"

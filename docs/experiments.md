@@ -312,3 +312,15 @@ floor with graph CSVs, `plan_topo/<floor>.png` (colour-block plan + full M netwo
 (outline + network) and `thumbs/<floor>.png` (360 px square), plus `floors.csv` (nodes, edges, skeleton size, area, façade
 entrances, nodes outside the outline, CSV↔mask alignment, plan availability). Resumable, parallel. The Viewer Hub renovation
 picker reads `thumbs/` and `floors.csv` directly (instant) and falls back to on-the-fly rendering (~0.5 s / floor) when absent.
+
+### Alignment v2 + outline fallback (after floors.csv from 5 632 floors, 2026-09-08)
+The first alignment left 971 floors with nodes outside: 408 floors stayed at "identity" with ~48 % of nodes outside (bbox
+candidates cannot help when the CSV covers a different part of the plan), 252 scale-aligned floors still had > 10 % outside
+(asymmetric crops), and 373 floors failed on a one-row `*_M.csv` (csv.Sniffer). Fixes: (i) alignment score = IoU + share of
+M key points inside, candidates followed by coordinate-descent refinement (translation 1/16 diag → 1 px, scale ±2 %);
+(ii) `Stage3Dataset.outline`: if < 90 % of the key points are inside the aligned mask, the mask is a different region → the
+outline is rebuilt from the floor's own `*_total.csv` shop polygons (always consistent with the key points; recorded in
+`extra["outline_fallback"]`, `floors.csv: outline_source`); (iii) `read_csv_robust` for tiny CSVs. Synthetic tests: shifted /
+rescaled / asymmetrically-cropped masks all → 100 % inside; unrelated mask → fallback. Plates now draw the network in 90 %
+black over a desaturated, lightened plan (saturation 0.55, +18 % white) with a thin outline; CJK font chain applied at hub
+import (no more missing-glyph titles).

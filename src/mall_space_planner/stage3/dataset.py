@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mall_space_planner.stage3.outline import DEFAULT_M_PER_PX, Outline, align_outline_to_csv, outline_from_mask, outline_from_total_csv
+from mall_space_planner.stage3.outline import DEFAULT_M_PER_PX, Outline, align_outline_to_csv, nodes_inside_rate, outline_from_mask, outline_from_total_csv
 
 FUNC_COLOURS_RGB = {  # clean_img colour blocks (from readme.md); func index → (r, g, b)
     "corridor": (252, 249, 242),
@@ -100,6 +100,8 @@ class FloorImageRecord:
 class Stage3Dataset:
     """``dataset_0.csv`` accessor: per-floor corridor ratio / pixel area / region list + outline loader."""
 
+    min_nodes_inside: float = 0.9  # below this share of key points inside the mask outline, fall back to the CSV-polygon outline
+
     def __init__(self, paths: Stage3Paths) -> None:
         self.paths = paths
         self.df = pd.DataFrame()
@@ -136,13 +138,23 @@ class Stage3Dataset:
         """Outline from the mask PNG when available, else from ``*_total.csv`` polygons. ``area_m2`` = this region's
         gross area in m² (if known) fixes the pixel scale; otherwise the configured default is used."""
         mp = self.paths.outline_mask(floor_id, region)
+        tp = self.paths.total_csv(floor_id)
         if mp is not None:
             o = outline_from_mask(mp, area_m2=area_m2)
-            tp = self.paths.total_csv(floor_id)
             if tp is not None:  # the graph CSV pixel frame may be shifted / rescaled against the processed mask PNG
                 o = align_outline_to_csv(o, tp)
+                rate = nodes_inside_rate(o, tp)
+                o.extra["nodes_inside_rate_mask"] = round(rate, 3)
+                if rate < self.min_nodes_inside:
+                    # the mask is a different region of a multi-region floor (or an unrelated crop): the outline rebuilt from
+                    # the graph's own shop polygons is always consistent with the key points – use it instead
+                    alt = outline_from_total_csv(tp, area_m2=area_m2, close_px=self.paths.outline_close_px)
+                    alt_rate = nodes_inside_rate(alt, tp)
+                    if alt_rate > rate:
+                        alt.extra["outline_fallback"] = {"from": "total_csv", "reason": f"mask nodes_inside {rate:.2f} < {self.min_nodes_inside}", "mask_rate": round(rate, 3), "csv_rate": round(alt_rate, 3)}
+                        alt.extra["csv_align"] = o.extra.get("csv_align")
+                        o = alt
         else:
-            tp = self.paths.total_csv(floor_id)
             if tp is None:
                 raise FileNotFoundError(f"no outline source for {floor_id} (mask dir / *_total.csv)")
             o = outline_from_total_csv(tp, area_m2=area_m2, close_px=self.paths.outline_close_px)

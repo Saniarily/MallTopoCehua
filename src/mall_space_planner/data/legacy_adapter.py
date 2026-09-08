@@ -160,10 +160,12 @@ def load_graph_csv(edge_csv: Path, node_csv: Path, normalize_positions: bool = F
         normalize_positions: If True, centre coordinates and scale to ``[-1, 1]`` per graph
             (this is what the legacy PyG cache did). Raw pixel coordinates are kept otherwise.
     """
-    edf = pd.read_csv(edge_csv, sep=None, engine="python")
+    from mall_space_planner.data.corpus_builder import read_csv_robust
+
+    edf = read_csv_robust(edge_csv)
     if not {"Source", "Target"}.issubset(edf.columns):
         raise ValueError(f"{edge_csv}: expected columns Source/Target, got {list(edf.columns)}")
-    ndf = pd.read_csv(node_csv, sep=None, engine="python")
+    ndf = read_csv_robust(node_csv)
     if not {"Node_ID", "Total_L_Neighbors"}.issubset(ndf.columns):
         raise ValueError(f"{node_csv}: expected Node_ID/Total_L_Neighbors, got {list(ndf.columns)}")
 

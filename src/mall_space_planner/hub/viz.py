@@ -20,13 +20,30 @@ from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL  # noqa: E402
 from mall_space_planner.topology.convert import to_networkx  # noqa: E402
 
 
+_STYLED = False
+
+
 def _style() -> None:
+    """Apply the thesis matplotlib style (CJK-safe font chain) once per process. Called at import so every figure drawn
+    by the hub (thumbnails, plates, candidates, Streamlit pages) renders Chinese labels; DejaVu Sans stays in the chain
+    for glyphs the CJK font lacks (e.g. the superscript ² in m²)."""
+    global _STYLED
+    if _STYLED:
+        return
     try:
         from mall_space_planner.reporting.style import apply_style
 
         apply_style()
+        import warnings
+
+        warnings.filterwarnings("ignore", message=r"Glyph .* missing from font", category=UserWarning)
+        _STYLED = True
     except Exception:  # noqa: BLE001
         pass
+
+
+ensure_style = _style
+_style()
 
 
 def poly(ax, geom, **kw) -> None:  # noqa: ANN001
@@ -39,7 +56,16 @@ def poly(ax, geom, **kw) -> None:  # noqa: ANN001
             ax.add_patch(MplPolygon(np.array(ring.coords), closed=True, fc="white", ec=kw.get("ec", "none"), lw=kw.get("lw", 0.5)))
 
 
-def draw_network_in_outline(ax, topo, pos: dict, outline, skeleton_nodes: set | None = None, title: str = "", anchored=None, node_size: float = 16.0) -> None:  # noqa: ANN001
+NETWORK_STYLES = {
+    # orange: generated / renovation figures (network is the subject, background is flat grey)
+    "orange": {"main": "#D9480F", "sec": "#e8a37a", "lw_main": 1.5, "lw_sec": 0.9, "node_sk": "#2B2B2B", "node": "#1f77b4", "alpha": 1.0},
+    # ink: real floor plates over a colour-block plan – 90 % black lines read clearly on pastel blocks
+    "ink": {"main": "#000000", "sec": "#000000", "lw_main": 1.6, "lw_sec": 0.7, "node_sk": "#000000", "node": "#444444", "alpha": 0.9},
+}
+
+
+def draw_network_in_outline(ax, topo, pos: dict, outline, skeleton_nodes: set | None = None, title: str = "", anchored=None, node_size: float = 16.0, style: str = "orange") -> None:  # noqa: ANN001
+    st = NETWORK_STYLES[style]
     sk = set(skeleton_nodes or ())
     g = to_networkx(topo)
     if outline is not None:
@@ -47,9 +73,9 @@ def draw_network_in_outline(ax, topo, pos: dict, outline, skeleton_nodes: set | 
     for u, v in g.edges:
         if u in pos and v in pos:
             main = u in sk and v in sk
-            ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]], color="#D9480F" if main else "#e8a37a", lw=1.5 if main else 0.9, zorder=3)
+            ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]], color=st["main"] if main else st["sec"], lw=st["lw_main"] if main else st["lw_sec"], alpha=st["alpha"], zorder=3, solid_capstyle="round")
     nodes = [v for v in g.nodes if v in pos]
-    ax.scatter([pos[v][0] for v in nodes], [pos[v][1] for v in nodes], s=node_size, c=["#2B2B2B" if v in sk else "#1f77b4" for v in nodes], zorder=5, edgecolors="white", linewidths=0.5)
+    ax.scatter([pos[v][0] for v in nodes], [pos[v][1] for v in nodes], s=node_size, c=[st["node_sk"] if v in sk else st["node"] for v in nodes], alpha=st["alpha"], zorder=5, edgecolors="white", linewidths=0.5)
     for v in anchored or ():
         if v in pos:
             ax.scatter([pos[v][0]], [pos[v][1]], s=70, facecolors="none", edgecolors="#D9480F", linewidths=1.2, zorder=6)

@@ -224,3 +224,46 @@ def test_align_outline_to_csv_recovers_shift_and_scale(tmp_path):
     mp = tmp_path / "same.png"; img.save(mp)
     o = align_outline_to_csv(outline_from_mask(mp), tot)
     assert o.extra["csv_align"]["mode"] == "identity"
+
+
+def test_dataset_outline_falls_back_when_mask_is_unrelated(tmp_path):
+    """Mask PNG of a different region: < 90 % key points inside after alignment -> outline rebuilt from *_total.csv."""
+    import shutil
+
+    from PIL import Image, ImageDraw
+
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+    from mall_space_planner.stage3.outline import nodes_inside_rate
+
+    gd = tmp_path / "g"; gd.mkdir()
+    for f in Path("tests/fixtures/graph_csv").glob("B000A0E928_1*"):
+        shutil.copy(f, gd / f.name)
+    md = tmp_path / "mask"; md.mkdir()
+    img = Image.new("L", (400, 300), 0); ImageDraw.Draw(img).rectangle([40, 40, 360, 260], fill=255)  # wide box, not this floor
+    img.save(md / "B000A0E928_1_0.png")
+    ds = Stage3Dataset(Stage3Paths(graph_dir=gd, outline_mask_dir=md))
+    o = ds.outline("B000A0E928_1", 0)
+    assert o.extra.get("outline_fallback", {}).get("from") == "total_csv"
+    assert nodes_inside_rate(o, gd / "B000A0E928_1_total.csv") >= 0.98
+
+
+def test_outline_falls_back_to_csv_when_mask_is_unrelated(tmp_path):
+    """A mask from another region / crop puts most key points outside even after alignment -> CSV-polygon outline."""
+    from PIL import Image, ImageDraw
+
+    from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths
+    from mall_space_planner.stage3.outline import nodes_inside_rate
+
+    md = tmp_path / "outer_mask"; md.mkdir()
+    img = Image.new("L", (420, 320), 0); ImageDraw.Draw(img).rectangle([10, 10, 400, 300], fill=255); img.save(md / "B000A0E928_1_0.png")
+    ds = Stage3Dataset(Stage3Paths(graph_dir=Path("tests/fixtures/graph_csv"), outline_mask_dir=md))
+    o = ds.outline("B000A0E928_1", 0)
+    assert o.extra.get("outline_fallback", {}).get("from") == "total_csv"
+    assert nodes_inside_rate(o, Path("tests/fixtures/graph_csv/B000A0E928_1_total.csv")) >= 0.98
+
+
+def test_read_csv_robust_one_row(tmp_path):
+    from mall_space_planner.data.corpus_builder import load_target_csv
+
+    p = tmp_path / "x_M.csv"; p.write_text("Source,Target,Shared_L_Count,Shared_L_Nodes\nM001,M002,1,[]\n")
+    assert load_target_csv(p).num_nodes == 2
