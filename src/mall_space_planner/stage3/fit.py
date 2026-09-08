@@ -54,6 +54,8 @@ class FitParams:
     snap_dist: float = 6.0  # corner snapping distance
     n_restarts: int = 6
     raster_px: float = 1.0
+    w_leaf_facade: float = 0.6  # dead-end key points are entrances: pull (non-anchored) leaves towards the inset boundary
+    anchor_jitter: float = 0.35  # renovation mode: restarts jitter the *new* nodes by this × min_spacing (anchored nodes never move)
 
 
 @dataclass
@@ -215,6 +217,67 @@ def _init_on_inset(g: nx.Graph, roles: dict[str, str], outer_cycle: list[str], i
     return cands
 
 
+def _init_anchored(g: nx.Graph, fixed: dict[str, np.ndarray], inset: Polygon, lines: list[LineString], depth: float, rng: np.random.RandomState, n: int = 4, jitter: float = 0.0) -> list[dict[str, np.ndarray]]:
+    """Renovation start: anchored nodes at their real positions; new nodes with ≥ 2 placed neighbours by Tutte
+    (barycentre of the anchored frame), the rest walked outward from their attachment (BFS, towards the medial axis).
+    ``n`` candidates differ by a jitter of the new nodes (the first one is unjittered)."""
+    new_nodes = [v for v in g.nodes if v not in fixed]
+    cands: list[dict[str, np.ndarray]] = []
+    cen = np.array(inset.centroid.coords[0])
+    step = max(depth, 0.35 * float(np.sqrt(inset.area / max(g.number_of_nodes(), 1))))
+    for k in range(max(n, 1)):
+        pos = {v: q.copy() for v, q in fixed.items()}
+        # interior new nodes (degree ≥ 2, in a new-node cluster that touches an anchored node) → Tutte, solved jointly;
+        # dead ends and clusters without any anchored neighbour are placed by the BFS walk below
+        sub = g.subgraph(new_nodes)
+        inner: list[str] = []
+        for comp in nx.connected_components(sub):
+            if any(u in fixed for v in comp for u in g.neighbors(v)):
+                inner.extend(v for v in comp if g.degree(v) >= 2)
+        if inner:
+            try:
+                sol = _tutte_interior(g, pos, inner)
+                for v in inner:
+                    if v in sol and np.all(np.isfinite(sol[v])):
+                        pos[v] = _project_inside(sol[v], inset)
+            except Exception:  # noqa: BLE001  (singular system when a new cluster has no anchored neighbour)
+                pass
+        # BFS for whatever is still unplaced (chains / leaves hanging off one node)
+        placed = set(pos)
+        frontier = [v for v in g.nodes if v in placed]
+        while frontier:
+            nxt = []
+            for u in frontier:
+                for w in g.neighbors(u):
+                    if w in placed:
+                        continue
+                    par = [q for q in g.neighbors(w) if q in placed]
+                    base = np.mean([pos[q] for q in par], axis=0)
+                    d = base - cen
+                    d = d / (np.linalg.norm(d) + 1e-9)
+                    cand = base + d * step
+                    if g.degree(w) == 1:  # a new dead end is an entrance: head for the inset boundary
+                        cand = _boundary_point(inset, base)
+                        if np.linalg.norm(cand - base) < 0.3 * step:
+                            cand = base + d * step
+                    elif lines:
+                        cand = np.array(nearest_on_lines(lines, tuple(cand)))
+                        if np.linalg.norm(cand - base) < 0.3 * step:
+                            cand = base + d * step
+                    pos[w] = _project_inside(cand, inset)
+                    placed.add(w)
+                    nxt.append(w)
+            frontier = nxt
+        for v in g.nodes:
+            if v not in pos:
+                pos[v] = np.array(inset.representative_point().coords[0])
+        if k > 0 and jitter > 0:
+            for v in new_nodes:
+                pos[v] = _project_inside(pos[v] + rng.normal(0, jitter, 2), inset)
+        cands.append(pos)
+    return cands
+
+
 def _project_inside(p: np.ndarray, poly: Polygon) -> np.ndarray:
     if not np.all(np.isfinite(p)):
         c = poly.representative_point()
@@ -281,9 +344,10 @@ class CorridorFitter:
         self.p = params or FitParams()
 
     # ---- scoring ------------------------------------------------------------------------------
-    def score(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float]) -> tuple[float, dict]:
+    def score(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], fixed: set[str] | None = None) -> tuple[float, dict]:
         P = np.array([pos[v] for v in g.nodes])
-        inside = float(np.mean([inset.contains(Point(p)) or inset.touches(Point(p)) for p in P]))
+        movable = [pos[v] for v in g.nodes if not fixed or v not in fixed]
+        inside = float(np.mean([inset.contains(Point(p)) or inset.touches(Point(p)) for p in movable])) if movable else 1.0
         cross = _crossings(g, pos)
         # boundary proximity of outer nodes / axis proximity of branch nodes (normalised by shop depth)
         d_b = [inset.exterior.distance(Point(pos[v])) for v in g.nodes if roles[v] == "outer"]
@@ -342,8 +406,9 @@ class CorridorFitter:
         return float(np.mean(dist <= self.p.shop_depth * 1.1))
 
     # ---- relaxation ---------------------------------------------------------------------------
-    def relax(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], rng: np.random.RandomState) -> dict[str, np.ndarray]:
+    def relax(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], rng: np.random.RandomState, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
         p = self.p
+        fixed = fixed or set()
         nodes = list(g.nodes)
         pos = {k: v.copy() for k, v in pos.items()}
         checker = _NodeCrossChecker(g)
@@ -355,6 +420,14 @@ class CorridorFitter:
                 if roles[v] == "outer":
                     tgt = _boundary_point(inset, pos[v])
                     disp[v] += p.w_boundary * (tgt - pos[v]) * 0.5
+                elif roles[v] == "leaf" and g.degree(v) == 1:
+                    # a dead-end key point is an entrance (ground floor) – it belongs at the façade side of the inset,
+                    # not deep inside; the medial axis only keeps it from drifting sideways
+                    tgt = _boundary_point(inset, pos[v])
+                    disp[v] += p.w_leaf_facade * (tgt - pos[v]) * 0.5
+                    if lines:
+                        ta = np.array(nearest_on_lines(lines, tuple(pos[v])))
+                        disp[v] += 0.3 * p.w_axis * (ta - pos[v]) * 0.5
                 elif roles[v] in ("branch", "leaf") and lines:
                     tgt = np.array(nearest_on_lines(lines, tuple(pos[v])))
                     disp[v] += p.w_axis * (tgt - pos[v]) * 0.5
@@ -438,6 +511,8 @@ class CorridorFitter:
             # (line search) so crowded Tutte interiors can still expand instead of getting stuck
             Pcur = np.array([pos[v] for v in nodes])
             for i, v in enumerate(nodes):
+                if v in fixed:
+                    continue
                 old = pos[v]
                 full = disp[v] * p.step * (0.4 + 0.6 * T)
                 if np.linalg.norm(full) < 1e-9:
@@ -452,7 +527,7 @@ class CorridorFitter:
                     Pcur[i] = old
         return pos
 
-    def repair_crossings(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, rng: np.random.RandomState, passes: int = 3, n_random: int = 12) -> dict[str, np.ndarray]:
+    def repair_crossings(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, rng: np.random.RandomState, passes: int = 3, n_random: int = 12, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
         """Remove residual crossings left by the initialisation (Tutte on a non-convex inset can cross). For each
         endpoint of a crossing pair (interior nodes first) try: neighbour barycentre, points along the edges to its
         neighbours, random points in the inset; keep the first move that lowers the crossing count."""
@@ -466,7 +541,7 @@ class CorridorFitter:
             cm = np.triu(crossing_matrix(E, pos), 1)
             for i, j in zip(*np.nonzero(cm)):
                 bad.extend([*E[i], *E[j]])
-            order = sorted(set(bad), key=lambda v: (roles[v] == "outer", -bad.count(v)))
+            order = sorted((v for v in set(bad) if not fixed or v not in fixed), key=lambda v: (roles[v] == "outer", -bad.count(v)))
             minx, miny, maxx, maxy = inset.bounds
             for v in order:
                 cur = count_crossings(g, pos)
@@ -495,7 +570,7 @@ class CorridorFitter:
                 pos[v] = best[1]
         return pos
 
-    def open_angles(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, passes: int = 3) -> dict[str, np.ndarray]:
+    def open_angles(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, passes: int = 3, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
         """Post-pass: for every sharp wedge (angle < min_angle at node v between neighbours a, b) try moving the
         endpoint that is not on the outer loop (or the shorter arm) sideways so the angle opens to ~min_angle;
         the move is kept only if it stays inside the inset, creates no crossing and does not create a new sharp wedge
@@ -521,7 +596,7 @@ class CorridorFitter:
                         if ang >= target:
                             continue
                         # candidate mover: prefer non-outer, then the shorter arm
-                        order = sorted([a, b], key=lambda n: (roles.get(n) == "outer", np.linalg.norm(pos[n] - pos[v])))
+                        order = sorted([n for n in (a, b) if not fixed or n not in fixed], key=lambda n: (roles.get(n) == "outer", np.linalg.norm(pos[n] - pos[v])))
                         before = sharp_angle_rate(g, pos, p.min_angle_deg)
                         for m in order:
                             other = b if m == a else a
@@ -550,12 +625,12 @@ class CorridorFitter:
                 break
         return pos
 
-    def snap_corners(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon) -> dict[str, np.ndarray]:
+    def snap_corners(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
         corners = np.array(inset.exterior.coords[:-1])
         pos = {k: v.copy() for k, v in pos.items()}
         used = set()
         for v in g.nodes:
-            if roles[v] != "outer":
+            if roles[v] != "outer" or (fixed and v in fixed):
                 continue
             d = np.linalg.norm(corners - pos[v], axis=1)
             i = int(d.argmin())
@@ -570,13 +645,19 @@ class CorridorFitter:
         return pos
 
     # ---- main -----------------------------------------------------------------------------------
-    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None) -> FitResult:
-        """``skeleton_nodes`` (Stage-1 prototype): its cycle becomes the outer loop pinned to the inset boundary."""
+    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None, anchors: dict[str, tuple[float, float]] | None = None) -> FitResult:
+        """``skeleton_nodes`` (Stage-1 prototype): its cycle becomes the outer loop pinned to the inset boundary.
+
+        ``anchors`` (renovation mode): real positions (metres, outline frame) of nodes that must **not move** – typically
+        the existing mall's skeleton key points. Only the new nodes are placed (Tutte between their anchored neighbours,
+        then relaxed), so the core corridors keep their built shape and the new corridors are grafted onto them."""
         p = self.p
         g = to_networkx(topology)
         rng = np.random.RandomState(seed)
         depth = effective_depth(outline, p.shop_depth, p.depth_frac, p.depth_area_coef)
         inset = inset_region(outline, depth)
+        fixed_pos = {v: np.asarray(xy, float) for v, xy in (anchors or {}).items() if v in g.nodes}
+        fixed = set(fixed_pos)
         # spacing adapts to how many key points must share the inset (never above the configured value)
         self._spacing_backup = p.min_spacing
         p.min_spacing = float(min(p.min_spacing, 0.85 * np.sqrt(inset.area / max(g.number_of_nodes(), 1))))
@@ -584,10 +665,13 @@ class CorridorFitter:
         frame = dominant_directions(outline.polygon)
         _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0), skeleton_nodes=skeleton_nodes)
         roles = _roles(g, info)
-        cands = _init_on_inset(g, roles, list(info.get("outer_cycle", [])), inset, lines, depth, p.snap_dist, p.n_offsets)
+        if fixed:
+            cands = _init_anchored(g, fixed_pos, inset, lines, depth, rng, n=max(p.n_restarts, 1), jitter=p.anchor_jitter * p.min_spacing)
+        else:
+            cands = _init_on_inset(g, roles, list(info.get("outer_cycle", [])), inset, lines, depth, p.snap_dist, p.n_offsets)
         scored = []
         for pos0 in cands:
-            s, _ = self.score(g, pos0, roles, inset, lines, frame)
+            s, _ = self.score(g, pos0, roles, inset, lines, frame, fixed)
             scored.append((s, pos0))
         scored.sort(key=lambda t: t[0])
         # seed 0 = deterministic best-first; other seeds sample ``n_restarts`` poses from the top-2·n pool so a
@@ -598,19 +682,19 @@ class CorridorFitter:
             pool = [pool[i] for i in sorted(idx)]
         best = None
         for s0, pos0 in pool:
-            pos0 = self.repair_crossings(g, pos0, roles, inset, rng)  # planar start (relax never introduces crossings)
-            pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng)
-            pos1 = self.snap_corners(g, pos1, roles, inset)
-            pos1 = self.open_angles(g, pos1, roles, inset)
+            pos0 = self.repair_crossings(g, pos0, roles, inset, rng, fixed=fixed)  # planar start (relax never introduces crossings)
+            pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng, fixed=fixed)
+            pos1 = self.snap_corners(g, pos1, roles, inset, fixed=fixed)
+            pos1 = self.open_angles(g, pos1, roles, inset, fixed=fixed)
             if count_crossings(g, pos1):
-                pos1 = self.repair_crossings(g, pos1, roles, inset, rng)
-            s, diag = self.score(g, pos1, roles, inset, lines, frame)
+                pos1 = self.repair_crossings(g, pos1, roles, inset, rng, fixed=fixed)
+            s, diag = self.score(g, pos1, roles, inset, lines, frame, fixed)
             if best is None or s < best[0]:
                 best = (s, pos1, diag)
         s, pos, diag = best  # type: ignore[misc]
         diag["min_spacing_m"] = p.min_spacing
         p.min_spacing = self._spacing_backup
-        diag.update({"n_nodes": g.number_of_nodes(), "n_edges": g.number_of_edges(), "roles": {r: sum(1 for v in roles.values() if v == r) for r in ("outer", "core", "branch", "leaf")}, "inset_area_m2": float(inset.area), "outline_area_m2": outline.area, "effective_depth_m": depth, "n_candidates": len(cands)})
+        diag.update({"n_nodes": g.number_of_nodes(), "n_edges": g.number_of_edges(), "n_anchored": len(fixed), "roles": {r: sum(1 for v in roles.values() if v == r) for r in ("outer", "core", "branch", "leaf")}, "inset_area_m2": float(inset.area), "outline_area_m2": outline.area, "effective_depth_m": depth, "n_candidates": len(cands)})
         return FitResult(positions={k: (float(v[0]), float(v[1])) for k, v in pos.items()}, roles=roles, inset=inset, axis_lines=lines, frame_angles=frame, score=float(s), diagnostics=diag)
 
 

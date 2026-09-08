@@ -41,6 +41,11 @@ class RenderParams:
     entrance_spacing: float = 30.0
     entrance_width: float = 6.0
     entrance_reach: float = 4.0  # a dead end within this × main width of the façade becomes an entrance, else a vertical core
+    entrance_per_perimeter_m: float = 100.0  # target entrance count ≈ façade length / this (clipped to [min, max]); real ground floors: one entrance per ~80–120 m of façade
+    entrance_max_stub_m: float = 40.0  # an outer-loop node may become an entrance if its stub through the shop band is at most this long
+    atrium_per_area_m2: float = 8000.0  # target atrium count ≈ floor area / this (clipped to [1, max_atria])
+    max_atria: int = 4
+    atrium_spread: float = 0.22  # atria centroids at least this × sqrt(floor area) apart (distribute along the mall, not clustered)
     atrium_area_max: float = 900.0
     min_atrium_area: float = 80.0
     junction_pad: float = 1.25  # pad side = width × this
@@ -119,7 +124,8 @@ def widths_for(site_area: float, main_len: float, sec_len: float, prm: RenderPar
     budget = prm.corridor_ratio * site_area
     denom = main_len + prm.secondary_factor * sec_len
     w = budget / denom if denom > 1e-9 else prm.main_width
-    w = float(np.clip(w, prm.min_width, prm.main_width))
+    # the main corridor is always readably wider than the secondary one: secondary >= min_width, main >= min_width / factor
+    w = float(np.clip(w, prm.min_width / prm.secondary_factor, prm.main_width))
     return w, float(max(prm.min_width, w * prm.secondary_factor))
 
 
@@ -144,6 +150,16 @@ def _stub_to_facade(p: np.ndarray, outline: Polygon, direction_hint: np.ndarray 
                 fp = cand
     stub = LineString([p, fp]).buffer(width / 2, cap_style="flat", join_style="round").buffer(width * 0.02)
     return stub, fp
+
+
+def _sides(p: Polygon) -> tuple[float, float]:
+    xs, ys = np.array(p.minimum_rotated_rectangle.exterior.coords[:-1]).T
+    return float(np.hypot(xs[1] - xs[0], ys[1] - ys[0])), float(np.hypot(xs[2] - xs[1], ys[2] - ys[1]))
+
+
+def _aspect(p: Polygon) -> float:
+    e1, e2 = _sides(p)
+    return max(e1, e2) / max(min(e1, e2), 1e-9)
 
 
 def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, float]], outline: Outline, roles: dict[str, str] | None = None, params: RenderParams | None = None, skeleton_nodes: set[str] | None = None) -> CorridorPlan:
@@ -188,61 +204,61 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
     # drop crumbs (slivers left by the difference) smaller than one junction pad
     sec = unary_union([q for q in _polys(sec) if q.area >= (w_sec * prm.junction_pad) ** 2 * 0.5]) if _polys(sec) else Polygon()
     main = unary_union([q for q in _polys(main) if q.area >= (w_main * prm.junction_pad) ** 2 * 0.5]) if _polys(main) else Polygon()
-    # entrances
+    # entrances: every façade-near dead end, then outer-loop nodes spread along the façade until the target count
     entrances: list[dict] = []
-    cands = []
-    for v in g.nodes:
-        if v not in pos:
-            continue
-        dist = site.exterior.distance(Point(pos[v]))
-        if g.degree(v) == 1:  # dead-end corridors end at an entrance / anchor
-            u = next(iter(g.neighbors(v)))
-            cands.append((0, dist, v, pos[v] - pos[u]))
-        elif roles and roles.get(v) == "outer":
-            cands.append((1, dist, v, None))
-    cands.sort(key=lambda t: (t[0], t[1]))
     vertical_cores: list[dict] = []
-    for pri, dist, v, hint in cands:
-        if pri == 0 and dist > prm.entrance_reach * w_main:
-            # a dead end deep inside the floor: not an entrance – it is where a stair / escalator core sits
-            side = w_main * prm.junction_pad
-            vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
-            continue
-        if len(entrances) >= prm.max_entrances:
-            if pri == 0:  # every remaining dead end must still terminate somewhere
-                side = w_main * prm.junction_pad
-                vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
-            continue
+    side = w_main * prm.junction_pad
+    n_target = int(np.clip(round(site.exterior.length / prm.entrance_per_perimeter_m), prm.min_entrances, prm.max_entrances))
+
+    def _core(v: str) -> None:
+        vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
+
+    def _try_entrance(v: str, hint: np.ndarray | None, kind: str, max_len: float) -> bool:
         stub, fp = _stub_to_facade(pos[v], site, hint, min(prm.entrance_width, w_main))
-        if fp is None:
-            continue
+        if fp is None or np.linalg.norm(fp - pos[v]) > max_len:
+            return False
         if any(np.linalg.norm(fp - e["point"]) < prm.entrance_spacing for e in entrances):
-            if pri == 0:
-                side = w_main * prm.junction_pad
-                vertical_cores.append({"node": v, "point": pos[v], "polygon": Point(pos[v]).buffer(side / 2, cap_style="square")})
-            continue
-        if pri == 1 and len(entrances) >= prm.min_entrances and dist > 2.5 * w_main:
-            continue  # outer-loop candidates only to reach the minimum, unless they touch the façade anyway
+            return False
         stub_geom = stub.intersection(site).buffer(0) if stub is not None else Polygon()
         stub_geom = max(_polys(stub_geom), key=lambda q: q.area) if _polys(stub_geom) else Polygon()  # clipping can split the stub
-        entrances.append({"node": v, "point": fp, "stub": stub_geom, "kind": "dead_end" if pri == 0 else "loop"})
-    # atria = holes enclosed by main corridors (centre-line faces), shrunk to leave an inward shop ring
+        entrances.append({"node": v, "point": fp, "stub": stub_geom, "kind": kind})
+        return True
+
+    dead = sorted((v for v in g.nodes if v in pos and g.degree(v) == 1), key=lambda v: site.exterior.distance(Point(pos[v])))
+    for v in dead:
+        u = next(iter(g.neighbors(v)))
+        dist = site.exterior.distance(Point(pos[v]))
+        # a dead end deep inside the floor is not an entrance – it is where a stair / escalator core sits
+        if dist > prm.entrance_reach * w_main or len(entrances) >= prm.max_entrances or not _try_entrance(v, pos[v] - pos[u], "dead_end", np.inf):
+            _core(v)
+    # outer-loop nodes: greedy farthest-point selection on the façade so entrances are distributed around the building
+    loop = [v for v in g.nodes if v in pos and g.degree(v) >= 2 and roles and roles.get(v) == "outer"]
+    if not loop and roles is None:
+        loop = [v for v in g.nodes if v in pos and g.degree(v) >= 2 and site.exterior.distance(Point(pos[v])) < prm.entrance_max_stub_m]
+    fps = {v: np.array(site.exterior.interpolate(site.exterior.project(Point(pos[v]))).coords[0]) for v in loop}
+    loop = [v for v in loop if np.linalg.norm(fps[v] - pos[v]) <= prm.entrance_max_stub_m]
+    while loop and len(entrances) < n_target:
+        if entrances:
+            v = max(loop, key=lambda q: min(np.linalg.norm(fps[q] - e["point"]) for e in entrances))
+        else:  # first one: the node closest to the façade
+            v = min(loop, key=lambda q: np.linalg.norm(fps[q] - pos[q]))
+        loop.remove(v)
+        if min((np.linalg.norm(fps[v] - e["point"]) for e in entrances), default=np.inf) < prm.entrance_spacing:
+            break  # the best remaining candidate is already too close: the façade is saturated
+        _try_entrance(v, None, "loop", prm.entrance_max_stub_m)
+    # atria: voids enclosed by corridors (faces of the whole centre-line network), preferring compact faces that open
+    # onto a main corridor, distributed along the mall (≈ one per ``atrium_per_area_m2``) rather than clustered
     atria: list[Polygon] = []
-    if main_segs:
-        faces = list(polygonize(unary_union(main_segs)))
-        for f in sorted(faces, key=lambda q: -q.area):
-            hole = f.buffer(-w_main / 2 - r_s * 0.5, join_style="round").buffer(0)
-            hole = hole.difference(unary_union([main, sec]).buffer(r_s * 0.5)).buffer(0)  # never overlap a corridor
-            hole = max(_polys(hole), key=lambda q: q.area) if _polys(hole) else Polygon()  # shrinking/subtracting can split a face
+    corr_body = unary_union([main, sec])
+    cands_a: list[tuple[float, Polygon]] = []
+    if main_segs or sec_segs:
+        for f in polygonize(unary_union([*main_segs, *sec_segs])):
+            hole = f.buffer(-w_sec / 2 - r_s * 0.5, join_style="round").buffer(0)
+            hole = hole.difference(corr_body.buffer(r_s * 0.3)).buffer(0)  # never overlap a corridor
+            hole = max(_polys(hole), key=lambda q: q.area) if _polys(hole) else Polygon()
             if hole.is_empty or hole.area < prm.min_atrium_area:
                 continue
-            # an atrium is a compact void, not a long sliver between two parallel corridors
-            mrr = hole.minimum_rotated_rectangle
-            xs, ys = np.array(mrr.exterior.coords[:-1]).T
-            e1, e2 = np.hypot(xs[1] - xs[0], ys[1] - ys[0]), np.hypot(xs[2] - xs[1], ys[2] - ys[1])
-            if min(e1, e2) < 1.5 * w_main or max(e1, e2) / max(min(e1, e2), 1e-9) > 4.0:
-                continue
-            if hole.area > prm.atrium_area_max:
+            if hole.area > prm.atrium_area_max:  # a large block: the atrium is its compact centre, ringed by island shops
                 lo, hi = 0.0, float(np.sqrt(hole.area))
                 for _ in range(25):
                     mid = (lo + hi) / 2
@@ -252,7 +268,26 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
                     else:
                         lo = mid
                 h2 = hole.buffer(-lo)
-                hole = max(_polys(h2), key=lambda q: q.area) if _polys(h2) else hole
+                h2 = max(_polys(h2), key=lambda q: q.area) if _polys(h2) else Polygon()
+                if not h2.is_empty and _aspect(h2) > 4.0:  # long sliver between parallel corridors: take a square at its centre
+                    c = h2.centroid
+                    h2 = hole.intersection(c.buffer(float(np.sqrt(prm.atrium_area_max)) / 2, cap_style="square")).buffer(0)
+                    h2 = max(_polys(h2), key=lambda q: q.area) if _polys(h2) else Polygon()
+                hole = h2
+            if hole.is_empty or hole.area < prm.min_atrium_area:
+                continue
+            e1, e2 = _sides(hole)
+            if min(e1, e2) < 1.5 * w_main or max(e1, e2) / max(min(e1, e2), 1e-9) > 4.0:
+                continue
+            compact = hole.area / max(hole.minimum_rotated_rectangle.area, 1e-9)
+            on_main = 2.0 if (not main.is_empty and hole.buffer(w_main).intersects(main)) else 1.0
+            cands_a.append((on_main * compact * min(hole.area, prm.atrium_area_max) / prm.atrium_area_max, hole))
+    n_atr = int(np.clip(round(site.area / prm.atrium_per_area_m2), 1, prm.max_atria))
+    spread = prm.atrium_spread * float(np.sqrt(site.area))
+    for _, hole in sorted(cands_a, key=lambda t: -t[0]):
+        if len(atria) >= n_atr:
+            break
+        if all(hole.centroid.distance(a.centroid) >= spread for a in atria):
             atria.append(hole)
     # units (for GeneratedLayout / exports)
     units: list[SpaceUnit] = []
