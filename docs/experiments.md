@@ -324,3 +324,20 @@ outline is rebuilt from the floor's own `*_total.csv` shop polygons (always cons
 rescaled / asymmetrically-cropped masks all → 100 % inside; unrelated mask → fallback. Plates now draw the network in 90 %
 black over a desaturated, lightened plan (saturation 0.55, +18 % white) with a thin outline; CJK font chain applied at hub
 import (no more missing-glyph titles).
+
+### Floor-plate export v1 audit (Mac, 6005 floors) → alignment v2
+`floors.csv` from the first Mac run: 5632 ok, 373 errors (`csv.Sniffer` fails on one-row `*_M.csv` → `read_csv_robust`
+fallback), alignment modes scale 4210 / scale_iso 916 / identity 408 / translate 63. Floors with key points outside the
+outline: 971 (17 145 / 217 763 nodes = 7.9 %). By mode: scale 1.3 %, scale_iso 1.0 %, translate 38 %, **identity 48 %**
+(71 floors with *all* nodes outside) – i.e. the residual is not a small offset but masks that belong to a different region
+/ crop of a multi-region floor, where the bbox candidates cannot find any overlap. Fixes:
+1. score = IoU(shop union, mask) + share of M points inside; coordinate-descent refinement (translation 1/16 diag → 1 px,
+   scale ±2 %) from the best candidate – recovers asymmetric crops (sandbox: right-quarter cut + shift, inside 0.54 → 1.00);
+2. `Stage3Dataset.outline`: when < 90 % of the key points are inside the aligned mask outline, fall back to the outline
+   rebuilt from the graph's own `*_total.csv` shop polygons (always consistent with the key points), recorded in
+   `extra["outline_fallback"]`; the plan PNG is then not used as background for that floor.
+Re-run `export_floor_plates.py --force` to regenerate; `floors.csv` now also reports `nodes_inside_rate_mask`/fallback.
+
+Plate style after designer review: network in 90 % black (skeleton 1.6 px, secondary 0.7 px) over a desaturated
+(×0.55) and lightened (+18 %) colour plan; outline stroke thin grey; orange network kept only for generated / renovation
+figures on flat backgrounds; CJK font chain applied to all hub figures (titles were boxes).
