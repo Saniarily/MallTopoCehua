@@ -43,7 +43,7 @@ from mall_space_planner.data.corpus_builder import load_target_csv  # noqa: E402
 from mall_space_planner.data.legacy_adapter import load_graph_csv, split_floor_id  # noqa: E402
 from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, render_corridors  # noqa: E402
 from mall_space_planner.stage3.dataset import Stage3Dataset, Stage3Paths  # noqa: E402
-from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, renovate_floor  # noqa: E402
+from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL, build_generator, make_score_fn, renovate_floor, select_floors  # noqa: E402
 from mall_space_planner.topology.convert import to_networkx  # noqa: E402
 from mall_space_planner.utils.config import resolve_config  # noqa: E402
 
@@ -86,7 +86,10 @@ def draw(r: dict, out_png: Path, gen_name: str, title: str) -> None:  # noqa: AN
     ib, ia = r["ind_b"], r["ind_a"]
     net(axes[0], r["before"], r["gt"], sk, f"① 现状：真实关键点网络\n{ib['num_nodes']} 节点 · {ib['num_cycles']} 回路 · ASPL {ib['avg_shortest_path']:.2f}")
     P = {k: np.asarray(v) for k, v in r["res"].positions.items()}
-    net(axes[1], r["after"], P, sk, f"② 更新：{gen_name}（黑 = 保留的主走廊节点）\n{ia['num_nodes']} 节点 · {ia['num_cycles']} 回路 · ASPL {ia['avg_shortest_path']:.2f}")
+    net(axes[1], r["after"], P, sk, f"② 更新：{gen_name}（黑 = 原型节点，位置重排；红框 = 保留的出入口）\n{ia['num_nodes']} 节点 · {ia['num_cycles']} 回路 · ASPL {ia['avg_shortest_path']:.2f}")
+    for v in r.get("anchored", ()):
+        if v in P:
+            axes[1].scatter([P[v][0]], [P[v][1]], s=70, facecolors="none", edgecolors="#D9480F", linewidths=1.2, zorder=6)
     ax = axes[2]
     plan = r["plan"]
     poly(ax, outline.polygon, fc="#f4f4f4", ec="#333", lw=1.0)
@@ -104,10 +107,10 @@ def draw(r: dict, out_png: Path, gen_name: str, title: str) -> None:  # noqa: AN
     ax.set_title(f"③ 走廊布局方案\n主廊 {d['main_width_m']:.0f} m / 次廊 {d['secondary_width_m']:.0f} m · {d['n_entrances']} 出入口 · {d['n_vertical_cores']} 竖向核 · {d['n_atria']} 中庭 · 占比 {d['corridor_ratio']*100:.0f}%", fontsize=9)
     # metric table
     ax = axes[3]; ax.axis("off")
-    keys = ["num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "avg_degree", "n_dead_ends"]
+    keys = ["pred_score", "num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "avg_degree", "n_dead_ends"]
     rows = []
     for k in keys:
-        b, a = ib[k], ia[k]
+        b, a = ib.get(k), ia.get(k)
         if b is None or a is None:
             continue
         better = BETTER.get(k, 0)
@@ -142,6 +145,11 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--low-score", type=float, default=None, help="keep only malls with total_score <= this (needs data/processed/legacy/cases.csv)")
     ap.add_argument("--max-nodes", type=int, default=120)
+    ap.add_argument("--min-nodes", type=int, default=12, help="floor filter: at least this many key points")
+    ap.add_argument("--min-area", type=float, default=6000.0, help="floor filter: at least this floor area (m2)")
+    ap.add_argument("--no-filter", action="store_true", help="take --floors verbatim (no size / entrance / floor-index filter)")
+    ap.add_argument("--keep-skeleton-positions", action="store_true", help="anchor all skeleton nodes at their real positions (old behaviour); default anchors only the existing entrances")
+    ap.add_argument("--no-score", action="store_true", help="do not use the Stage-1 predicted score in candidate selection")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--restarts", type=int, default=4)
     ap.add_argument("--candidates", type=int, default=6, help="generator samples per floor; the one with the best renovation objective (fewest new dead ends, loops / ASPL not worse) is kept")
@@ -163,21 +171,38 @@ def main() -> None:
         corpus = Path(a.corpus or cfg.get("stage2_corpus", "data/processed/legacy/stage2_corpus_v2.jsonl"))
         smp = load_corpus_jsonl(corpus, split=a.split)
         floors += [s.sample_id for s in smp]
-    if a.low_score is not None:
-        cases = Path(cfg.get("data", {}).get("processed_dir", "data/processed/legacy")) / "cases.csv"
-        if cases.exists():
-            df = pd.read_csv(cases)
-            low = set(df.loc[df["total_score"] <= a.low_score, "mall_id"].astype(str))
-            floors = [f for f in floors if split_floor_id(f)[0] in low]
-            print(f"low-score filter (<= {a.low_score}): {len(floors)} floors")
-        else:
-            print(f"[warn] {cases} not found; --low-score ignored")
+    cases = None
+    cases_p = Path(cfg.get("data", {}).get("processed_dir", "data/processed/legacy")) / "cases.csv"
+    if cases_p.exists():
+        cases = pd.read_csv(cases_p)
+    elif a.low_score is not None:
+        print(f"[warn] {cases_p} not found; --low-score ignored")
+    if not a.no_filter:
+        n0 = len(floors)
+        floors = select_floors(ds, s3.graph_dir, floors, cases=cases, low_score=a.low_score, min_nodes=a.min_nodes, min_area_m2=a.min_area, max_nodes=a.max_nodes, require_entrance=True, prefer_floors=(1, 2))
+        print(f"floor filter: {n0} -> {len(floors)} (score<= {a.low_score}, nodes>= {a.min_nodes}, area>= {a.min_area:.0f} m2, floors 1-2 with an entrance)")
     floors = floors[: a.limit] if a.limit else floors
     if not floors:
         raise SystemExit("no floors selected")
     out = (ROOT / a.out) if not Path(a.out).is_absolute() else Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     gen, gen_name = build_generator(Path(a.results))
+    svc, db = None, None
+    if not a.no_score:
+        try:
+            from mall_space_planner.api.service import PlanningService
+            from mall_space_planner.data.case_db import CaseDatabase
+
+            s1 = resolve_config("configs/stage1/extra_trees.yaml", []); s2 = resolve_config("configs/stage2/search_baseline.yaml", [])
+            proc = Path(s1["data"]["processed_dir"])
+            if (proc / "manifest.json").exists():
+                db = CaseDatabase.load(str(proc)); s1["stage1"]["counterfactuals"] = {"enabled": False}
+                svc = PlanningService(db, s1, s2)
+                print("stage-1 scorer ready (predicted score used in candidate selection)")
+            else:
+                print(f"[warn] {proc} has no manifest.json; predicted score disabled")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] stage-1 scorer unavailable ({exc}); predicted score disabled")
     shop_depth = float((cfg.get("stage3") or {}).get("shop_depth_m", 14.0)); cr = float((cfg.get("stage3") or {}).get("corridor_ratio", 0.18))
     fitter = CorridorFitter(FitParams(shop_depth=shop_depth, n_restarts=a.restarts, iters=a.iters)); rp = RenderParams(corridor_ratio=cr)
     rows = []
@@ -187,8 +212,17 @@ def main() -> None:
             n_probe = load_target_csv(s3.graph_dir / f"{fid}_M.csv").num_nodes if (s3.graph_dir / f"{fid}_M.csv").exists() else None
             if n_probe is not None and n_probe > a.max_nodes:
                 rows.append({"floor_id": fid, "status": "skipped_large", "n_nodes": n_probe}); continue
-            r = renovate_floor(fid, s3.graph_dir, ds, gen, fitter, rp, seed=a.seed, n_candidates=a.candidates)
-            draw(r, out / f"{fid}.png", gen_name, f"旧商场改造：{fid}（同一轮廓、保留主走廊与出入口，重新生长次级网络）")
+            score_fn = None
+            if svc is not None:
+                from mall_space_planner.schemas import PlanningCondition
+
+                row_c = db.cases[db.cases[db.id_col] == fid]
+                if not row_c.empty:
+                    r0 = row_c.iloc[0]
+                    cond = PlanningCondition(city_cluster=int(r0["city_cluster"]) if pd.notna(r0.get("city_cluster")) else None, **{c: (float(r0[c]) if pd.notna(r0.get(c)) else None) for c in db.query_cols})
+                    score_fn = make_score_fn(svc, cond)
+            r = renovate_floor(fid, s3.graph_dir, ds, gen, fitter, rp, seed=a.seed, n_candidates=a.candidates, score_fn=score_fn, keep_skeleton_positions=a.keep_skeleton_positions)
+            draw(r, out / f"{fid}.png", gen_name, f"旧商场改造：{fid}（同一轮廓、保留出入口位置，以原型为骨架重新生长并重排布局）")
             r["row"].update({"status": "ok", "generator": gen_name, "seconds": round(time.time() - t0, 1)})
             rows.append(r["row"])
             ib, ia = r["ind_b"], r["ind_a"]
@@ -203,7 +237,7 @@ def main() -> None:
     df = pd.DataFrame(rows)
     ok = df[df["status"] == "ok"] if "status" in df else df
     summary = {"n_floors": int(len(ok)), "generator": gen_name, "status_counts": df["status"].str.split(":").str[0].value_counts().to_dict() if "status" in df else {}}
-    for k in ["num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "n_dead_ends", "sharp_angle_rate", "corridor_ratio", "n_entrances", "n_atria"]:
+    for k in ["pred_score", "num_cycles", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "degree_entropy", "n_dead_ends", "sharp_angle_rate", "corridor_ratio", "n_entrances", "n_atria"]:
         b, aa = f"before_{k}", f"after_{k}"
         if b in ok and aa in ok and ok[aa].notna().any():
             d = (ok[aa] - ok[b]).dropna()

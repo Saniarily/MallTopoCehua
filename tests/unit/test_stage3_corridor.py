@@ -152,9 +152,11 @@ def test_renovation_mode_anchors_skeleton_and_regrows():
     gen, _ = build_generator(None)
     r = renovate_floor("B000A0E928_1", fix, ds, gen, CorridorFitter(FitParams(n_restarts=2, iters=40)), RenderParams(), seed=0, n_candidates=2)
     assert r["after"].num_nodes == r["before"].num_nodes
-    # anchored skeleton nodes did not move
-    for v in r["sk_nodes"]:
+    # anchored nodes (existing entrances) did not move; skeleton nodes were re-laid-out
+    assert r["anchored"] and len(r["entrance_points"]) >= 2
+    for v in r["anchored"]:
         assert np.allclose(r["res"].positions[v], r["gt"][v], atol=1e-6)
+    assert r["res"].diagnostics["init_mode"] == "outline"
     assert r["row"]["after_crossings"] == 0
     assert r["row"]["after_inside_ratio"] == 1.0
     assert r["plan"].diagnostics["n_entrances"] >= 2

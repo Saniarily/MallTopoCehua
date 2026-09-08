@@ -162,11 +162,12 @@ def _aspect(p: Polygon) -> float:
     return max(e1, e2) / max(min(e1, e2), 1e-9)
 
 
-def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, float]], outline: Outline, roles: dict[str, str] | None = None, params: RenderParams | None = None, skeleton_nodes: set[str] | None = None) -> CorridorPlan:
+def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, float]], outline: Outline, roles: dict[str, str] | None = None, params: RenderParams | None = None, skeleton_nodes: set[str] | None = None, entrance_points: list[tuple[float, float]] | None = None) -> CorridorPlan:
     """``skeleton_nodes``: Stage-1 prototype nodes → skeleton–skeleton edges are the main corridors (see
     :func:`classify_edges`). Dead ends (degree-1 nodes) become entrances when the façade is within
     ``prm.entrance_reach`` × main width, otherwise they are marked as vertical circulation (stairs/escalator cores) –
-    a real mall corridor never simply stops."""
+    a real mall corridor never simply stops. ``entrance_points`` (renovation): existing entrance positions that are kept –
+    each is connected to the nearest corridor node by a stub and counts towards the entrance target first."""
     prm = params or RenderParams()
     g = to_networkx(topology)
     pos = {k: np.asarray(v, float) for k, v in positions.items()}
@@ -224,7 +225,23 @@ def render_corridors(topology: TopologyGraph, positions: dict[str, tuple[float, 
         entrances.append({"node": v, "point": fp, "stub": stub_geom, "kind": kind})
         return True
 
-    dead = sorted((v for v in g.nodes if v in pos and g.degree(v) == 1), key=lambda v: site.exterior.distance(Point(pos[v])))
+    # existing entrances (renovation) first: stub from the nearest node that can reach the façade point in a short run
+    claimed: set[str] = set()
+    for ep in entrance_points or []:
+        ep = np.asarray(ep, float)
+        fp = np.array(site.exterior.interpolate(site.exterior.project(Point(ep))).coords[0])
+        if any(np.linalg.norm(fp - e["point"]) < prm.entrance_spacing * 0.5 for e in entrances):
+            continue
+        order = sorted((v for v in g.nodes if v in pos and v not in claimed), key=lambda v: (g.degree(v) != 1, np.linalg.norm(pos[v] - fp)))
+        for v in order[:3]:
+            if np.linalg.norm(pos[v] - fp) > prm.entrance_max_stub_m:
+                break
+            stub = LineString([pos[v], fp]).buffer(min(prm.entrance_width, w_main) / 2, cap_style="flat").intersection(site).buffer(0)
+            stub = max(_polys(stub), key=lambda q: q.area) if _polys(stub) else Polygon()
+            entrances.append({"node": v, "point": fp, "stub": stub, "kind": "existing"})
+            claimed.add(v)
+            break
+    dead = sorted((v for v in g.nodes if v in pos and g.degree(v) == 1 and v not in claimed), key=lambda v: site.exterior.distance(Point(pos[v])))
     for v in dead:
         u = next(iter(g.neighbors(v)))
         dist = site.exterior.distance(Point(pos[v]))

@@ -55,6 +55,7 @@ class FitParams:
     n_restarts: int = 6
     raster_px: float = 1.0
     w_leaf_facade: float = 0.6  # dead-end key points are entrances: pull (non-anchored) leaves towards the inset boundary
+    w_entrance_target: float = 1.2  # renovation: pull leaves towards the existing entrance positions (nearest unclaimed target)
     anchor_jitter: float = 0.35  # renovation mode: restarts jitter the *new* nodes by this × min_spacing (anchored nodes never move)
 
 
@@ -406,17 +407,33 @@ class CorridorFitter:
         return float(np.mean(dist <= self.p.shop_depth * 1.1))
 
     # ---- relaxation ---------------------------------------------------------------------------
-    def relax(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], rng: np.random.RandomState, fixed: set[str] | None = None) -> dict[str, np.ndarray]:
+    def relax(self, g: nx.Graph, pos: dict[str, np.ndarray], roles: dict[str, str], inset: Polygon, lines: list[LineString], frame: list[float], rng: np.random.RandomState, fixed: set[str] | None = None, entrance_targets: list[np.ndarray] | None = None) -> dict[str, np.ndarray]:
         p = self.p
         fixed = fixed or set()
         nodes = list(g.nodes)
         pos = {k: v.copy() for k, v in pos.items()}
         checker = _NodeCrossChecker(g)
+        # renovation: existing entrance positions (projected onto the inset boundary) that the leaves should reach
+        tgt_pts = [_project_inside(np.asarray(t, float), inset) for t in (entrance_targets or [])]
+        leaves = [v for v in nodes if g.degree(v) == 1 and v not in fixed]
         for it in range(p.iters):
             T = 1.0 - it / p.iters  # annealed step
             disp = {v: np.zeros(2) for v in nodes}
+            # leaves -> existing entrance positions (greedy nearest assignment, one leaf per target)
+            assign: dict[str, np.ndarray] = {}
+            if tgt_pts and leaves:
+                pairs = sorted(((np.linalg.norm(pos[v] - t), i, v) for v in leaves for i, t in enumerate(tgt_pts)), key=lambda x: x[0])
+                used_t: set[int] = set()
+                for _, i, v in pairs:
+                    if v in assign or i in used_t:
+                        continue
+                    assign[v] = tgt_pts[i]
+                    used_t.add(i)
             # role-based attraction
             for v in nodes:
+                if v in assign:
+                    disp[v] += p.w_entrance_target * (assign[v] - pos[v]) * 0.5
+                    continue
                 if roles[v] == "outer":
                     tgt = _boundary_point(inset, pos[v])
                     disp[v] += p.w_boundary * (tgt - pos[v]) * 0.5
@@ -650,12 +667,17 @@ class CorridorFitter:
         return pos
 
     # ---- main -----------------------------------------------------------------------------------
-    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None, anchors: dict[str, tuple[float, float]] | None = None) -> FitResult:
+    def fit(self, topology: TopologyGraph, outline: Outline, seed: int = 0, skeleton_nodes: set[str] | None = None, anchors: dict[str, tuple[float, float]] | None = None, entrance_targets: list[tuple[float, float]] | None = None, init: str = "auto") -> FitResult:
         """``skeleton_nodes`` (Stage-1 prototype): its cycle becomes the outer loop pinned to the inset boundary.
 
         ``anchors`` (renovation mode): real positions (metres, outline frame) of nodes that must **not move** – typically
         the existing mall's skeleton key points. Only the new nodes are placed (Tutte between their anchored neighbours,
-        then relaxed), so the core corridors keep their built shape and the new corridors are grafted onto them."""
+        then relaxed), so the core corridors keep their built shape and the new corridors are grafted onto them.
+
+        ``entrance_targets``: existing entrance positions (metres) the dead ends of the new network should reach (renovation
+        keeps the entrances even when the anchored set is small). ``init``: ``"anchored"`` (Tutte from the anchors),
+        ``"outline"`` (outer loop pinned to the inset, anchors overridden afterwards) or ``"auto"`` (anchored when ≥ 40 % of
+        the nodes are anchored)."""
         p = self.p
         g = to_networkx(topology)
         rng = np.random.RandomState(seed)
@@ -671,10 +693,14 @@ class CorridorFitter:
         frame = dominant_directions(outline.polygon)
         _, info = planar_corridor_embedding(topology, PlanarEmbedParams(ortho_weight=0.0, relax_iters=0), skeleton_nodes=skeleton_nodes)
         roles = _roles(g, info)
-        if fixed:
+        mode = init if init != "auto" else ("anchored" if fixed and len(fixed) >= 0.4 * g.number_of_nodes() else "outline")
+        if fixed and mode == "anchored":
             cands = _init_anchored(g, fixed_pos, inset, lines, depth, rng, n=max(p.n_restarts, 1), jitter=p.anchor_jitter * p.min_spacing)
         else:
             cands = _init_on_inset(g, roles, list(info.get("outer_cycle", [])), inset, lines, depth, p.snap_dist, p.n_offsets)
+            for c in cands:
+                c.update({v: q.copy() for v, q in fixed_pos.items()})
+        tg = [np.asarray(t, float) for t in (entrance_targets or [])]
         scored = []
         for pos0 in cands:
             s, _ = self.score(g, pos0, roles, inset, lines, frame, fixed)
@@ -689,13 +715,13 @@ class CorridorFitter:
         best = None
         for s0, pos0 in pool:
             pos0 = self.repair_crossings(g, pos0, roles, inset, rng, fixed=fixed)  # planar start (relax never introduces crossings)
-            pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng, fixed=fixed)
+            pos1 = self.relax(g, pos0, roles, inset, lines, frame, rng, fixed=fixed, entrance_targets=tg)
             pos1 = self.snap_corners(g, pos1, roles, inset, fixed=fixed)
             pos1 = self.open_angles(g, pos1, roles, inset, fixed=fixed)
             if count_crossings(g, pos1):
                 pos1 = self.repair_crossings(g, pos1, roles, inset, rng, passes=6 if fixed else 3, n_random=48 if fixed else 12, fixed=fixed)
                 if fixed and count_crossings(g, pos1):  # anchored edges cannot move: re-relax the new nodes from the repaired start
-                    pos1 = self.relax(g, pos1, roles, inset, lines, frame, rng, fixed=fixed)
+                    pos1 = self.relax(g, pos1, roles, inset, lines, frame, rng, fixed=fixed, entrance_targets=tg)
                     pos1 = self.repair_crossings(g, pos1, roles, inset, rng, passes=6, n_random=48, fixed=fixed)
             s, diag = self.score(g, pos1, roles, inset, lines, frame, fixed)
             if best is None or s < best[0]:
@@ -703,7 +729,7 @@ class CorridorFitter:
         s, pos, diag = best  # type: ignore[misc]
         diag["min_spacing_m"] = p.min_spacing
         p.min_spacing = self._spacing_backup
-        diag.update({"n_nodes": g.number_of_nodes(), "n_edges": g.number_of_edges(), "n_anchored": len(fixed), "roles": {r: sum(1 for v in roles.values() if v == r) for r in ("outer", "core", "branch", "leaf")}, "inset_area_m2": float(inset.area), "outline_area_m2": outline.area, "effective_depth_m": depth, "n_candidates": len(cands)})
+        diag.update({"n_nodes": g.number_of_nodes(), "n_edges": g.number_of_edges(), "n_anchored": len(fixed), "init_mode": mode, "n_entrance_targets": len(tg), "roles": {r: sum(1 for v in roles.values() if v == r) for r in ("outer", "core", "branch", "leaf")}, "inset_area_m2": float(inset.area), "outline_area_m2": outline.area, "effective_depth_m": depth, "n_candidates": len(cands)})
         return FitResult(positions={k: (float(v[0]), float(v[1])) for k, v in pos.items()}, roles=roles, inset=inset, axis_lines=lines, frame_angles=frame, score=float(s), diagnostics=diag)
 
 
