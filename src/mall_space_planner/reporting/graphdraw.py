@@ -126,7 +126,7 @@ def full_layout(full: nx.Graph, skeleton_nodes: set, sk_pos: dict, seed: int = 0
 
 
 # --------------------------------------------------------------------------- drawing
-def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | None = None, *, sk_pos: dict | None = None, pos: dict | None = None, title: str = "", highlight_edges=None, labels: bool = False, seed: int = 0, node_scale: float = 1.0, size_ref_n: int | None = None, frame: tuple | None = None, title_loc: str = "center", title_pad: float = 4) -> dict:
+def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | None = None, *, sk_pos: dict | None = None, pos: dict | None = None, title: str = "", highlight_edges=None, labels: bool = False, seed: int = 0, node_scale: float = 1.0, size_ref_n: int | None = None, frame: tuple | None = None, title_loc: str = "center", title_pad: float = 4, title_fs: float | None = None) -> dict:
     """Draw one topology. Provide ``sk_pos`` (shared skeleton positions) or full ``pos``.
 
     Returns the positions used so callers can reuse them for the next panel.
@@ -181,8 +181,11 @@ def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | Non
     lw_sk, lw_new = (2.0, 1.1) if n <= 40 else (1.5, 0.9)
     nx.draw_networkx_edges(g, pos, edgelist=new_e, ax=ax, width=lw_new, edge_color=ours, alpha=0.8)
     nx.draw_networkx_edges(g, pos, edgelist=sk_e, ax=ax, width=lw_sk, edge_color=dark, alpha=0.95)
-    if highlight_edges:
-        nx.draw_networkx_edges(g, pos, edgelist=highlight_edges, ax=ax, width=lw_sk + 1.0, edge_color=acc)
+    if highlight_edges:  # drawn above the nodes so the new connection is never hidden behind a disc
+        hc = nx.draw_networkx_edges(g, pos, edgelist=highlight_edges, ax=ax, width=lw_sk + 1.6, edge_color=acc)
+        for art in (hc if isinstance(hc, list) else [hc]):
+            if art is not None:
+                art.set_zorder(6)
     new_n = [v for v in g.nodes if v not in sk]
     sk_n = [v for v in g.nodes if v in sk]
     if new_n:
@@ -193,7 +196,7 @@ def draw_topology(ax, graph: TopologyGraph | nx.Graph, skeleton_nodes: set | Non
         for v in g.nodes:
             ax.text(pos[v][0], pos[v][1], v, ha="center", va="center", fontsize=max(4, min(7, r_pt * 0.9)), color="white" if v in sk else dark, zorder=5)
     if title:
-        ax.set_title(title, fontsize=s["fonts"]["size_annot"] + 0.5, loc=title_loc, pad=title_pad)
+        ax.set_title(title, fontsize=title_fs if title_fs is not None else s["fonts"]["size_annot"] + 0.5, loc=title_loc, pad=title_pad)
     return pos
 
 

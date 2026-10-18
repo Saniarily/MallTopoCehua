@@ -71,56 +71,69 @@ def r09_overview(results: Path, out: Path) -> list[Path]:
 
 
 def r10_attach_scatter(results: Path, out: Path) -> list[Path]:
-    """Per-seed scatter: attach recall (x) vs attach precision (y); size = pass rate."""
+    """Attach recall (x) vs attach precision (y). Marker = mean over seeds (±1 std error bars), faint dots = single
+    seeds. Methods are identified by a number printed at the marker and a numbered key at the right (no leader lines);
+    the dense AR-GNN cluster is repeated in a zoom inset so the numbers stay readable."""
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+
     ps = _per_seed(results)
     df = _summary(results)
     s = load_style()
-    f, ax = fig("double", 0.6)
-    shown = [n for n in df.index if n != "ref_ground_truth"]
-    if ps is not None:
-        for name, g in ps.groupby("experiment"):
-            if name == "ref_ground_truth":
-                continue
-            ax.scatter(g["attach_recall_pct"], g["attach_precision_pct"], s=18 + 140 * (g["overall_pass"] - 0.7).clip(0, 1), color=color_for(name), alpha=0.85, edgecolor="white", lw=0.5, label=_short(name))
-        note = "每个点 = 一次随机种子的评估；标注 = 各方法的均值位置"
-    else:  # only mean ± std available: one point per method with error bars
-        for name in shown:
-            ax.errorbar(df.loc[name, "attach_recall_pct_mean"], df.loc[name, "attach_precision_pct_mean"], xerr=df.loc[name, "attach_recall_pct_std"], yerr=df.loc[name, "attach_precision_pct_std"],
-                        fmt="o", ms=5 + 9 * float(np.clip(df.loc[name, "overall_pass_mean"] - 0.5, 0, 0.5)) * 2, color=color_for(name), ecolor=color_for(name), elinewidth=0.9, capsize=2.5, alpha=0.9, mec="white", mew=0.5)
-        note = "点 = 3 次随机种子的均值，误差线 = ±1 标准差"
-    # Labels in free space (data coords) with a leader line to the mean; positions chosen once per results round.
-    ann_r5 = {
-        "stage2_rule_baseline": (34.0, 30.0, "left"),
-        "stage2_search_baseline": (46.0, 34.5, "left"),
-        "stage2_ar_gnn_greedy": (41.0, 85.5, "left"),
-        "stage2_ar_gnn": (74.0, 78.0, "left"),
-        "stage2_ar_gnn_bestof16": (55.0, 76.5, "left"),
-        "stage2_ar_gnn_bfs_order": (74.0, 66.5, "left"),
-        "stage2_ar_gnn_greedy_order": (52.0, 62.0, "left"),
-        "stage2_ar_gnn_no_planar": (74.0, 72.0, "left"),
-        "stage2_ar_gnn_single_label": (84.0, 48.0, "center"),
-    }
-    ann_r4 = {
-        "stage2_rule_baseline": (44.5, 39.0, "left"), "stage2_search_baseline": (46.5, 45.5, "left"), "stage2_ar_gnn_greedy": (42.0, 87.5, "left"), "stage2_ar_gnn": (52.0, 82.5, "right"),
-        "stage2_ar_gnn_bestof16": (57.0, 68.5, "left"), "stage2_ar_gnn_long": (66.0, 82.5, "center"), "stage2_ar_gnn_bfs_order": (68.5, 79.5, "right"), "stage2_ar_gnn_basic_feats": (68.5, 69.0, "right"), "stage2_ar_gnn_single_label": (49.0, 72.5, "left"),
-    }
-    ann = ann_r5 if _round(results) == "r5" else ann_r4
-    for name, (tx, ty, ha) in ann.items():
-        if name not in df.index:
-            continue
-        txt = _short(name).split("（")[0].replace("自回归图网络", "本文").replace("消融：", "")
-        ax.annotate(txt, (df.loc[name, "attach_recall_pct_mean"], df.loc[name, "attach_precision_pct_mean"]), xytext=(tx, ty), textcoords="data", fontsize=s["fonts"]["size_annot"], color="#333", ha=ha, va="center",
-                    arrowprops={"arrowstyle": "-", "color": "#999", "lw": 0.6, "shrinkB": 4})
+    f = plt.figure(figsize=(s["figure"]["width_double"] * 1.15, s["figure"]["width_double"] * 0.60))
+    gs = f.add_gridspec(1, 2, width_ratios=[1.0, 0.40], wspace=0.02, left=0.08, right=0.995, top=0.90, bottom=0.12)
+    ax = f.add_subplot(gs[0, 0]); key = f.add_subplot(gs[0, 1]); key.axis("off")
+    order = ["stage2_rule_baseline", "stage2_search_baseline", "stage2_ar_gnn", "stage2_ar_gnn_bestof16", "stage2_ar_gnn_greedy", "stage2_ar_gnn_bfs_order", "stage2_ar_gnn_greedy_order", "stage2_ar_gnn_single_label", "stage2_ar_gnn_no_planar", "stage2_ar_gnn_long", "stage2_ar_gnn_long_bestof16", "stage2_ar_gnn_basic_feats"]
+    shown = [n for n in order if n in df.index] + [n for n in df.index if n not in order and n != "ref_ground_truth"]
+    xs = df.loc[shown, "attach_recall_pct_mean"]; ys = df.loc[shown, "attach_precision_pct_mean"]
+
+    def _draw(a, lab: bool, fs: float, ms_scale: float = 1.0) -> None:  # noqa: ANN001
+        for i, name in enumerate(shown, start=1):
+            c = color_for(name)
+            ours = name in ("stage2_ar_gnn", "stage2_ar_gnn_bestof16")
+            x, y = float(df.loc[name, "attach_recall_pct_mean"]), float(df.loc[name, "attach_precision_pct_mean"])
+            if ps is not None:
+                g = ps[ps["experiment"] == name]
+                a.scatter(g["attach_recall_pct"], g["attach_precision_pct"], s=14 * ms_scale, color=c, alpha=0.35, edgecolor="none", zorder=2)
+            a.errorbar(x, y, xerr=df.loc[name, "attach_recall_pct_std"], yerr=df.loc[name, "attach_precision_pct_std"], fmt="D" if ours else "o", ms=(10 if ours else 8.5) * ms_scale, color=c, ecolor=c, elinewidth=0.9, capsize=2.5, mec="white", mew=0.8, zorder=4)
+            if lab:
+                a.text(x, y, str(i), ha="center", va="center", fontsize=fs, color="white", fontweight="bold", zorder=5)
+
+    _draw(ax, True, s["fonts"]["size_annot"] - 1.5)
+    pad = 4.0
+    # extra room at the bottom-left for the zoom inset (the rule methods sit above it)
+    ax.set_xlim(float(xs.min()) - pad, float(xs.max()) + pad); ax.set_ylim(float(ys.min()) - pad - 14, float(ys.max()) + pad)
     ax.set_xlabel(label("metrics", "attach_recall_pct") + "  — 真实分支位置被找到的比例")
     ax.set_ylabel(label("metrics", "attach_precision_pct") + "  — 生成分支位置正确的比例")
-    ax.set_title(title_for("R10") + "（点越大 = 大纲合格率越高）", loc="left", fontweight="bold")
-    if _round(results) == "r5":
-        ax.set_xlim(30, 92)
-        ax.set_ylim(25, 92)
-    else:
-        ax.set_xlim(30, 72)
-        ax.set_ylim(35, 92)
-    ax.text(0.98, 0.03, note, transform=ax.transAxes, ha="right", va="bottom", fontsize=s["fonts"]["size_annot"], color="#666")
+    ax.grid(alpha=s["figure"]["grid_alpha"])
+    # zoom inset on the densest cluster (the AR-GNN family around the full model)
+    cx, cy = float(df.loc["stage2_ar_gnn", "attach_recall_pct_mean"]), float(df.loc["stage2_ar_gnn", "attach_precision_pct_mean"])
+    near = [n for n in shown if abs(float(df.loc[n, "attach_recall_pct_mean"]) - cx) < 7 and abs(float(df.loc[n, "attach_precision_pct_mean"]) - cy) < 4]
+    if len(near) >= 3:
+        nx_ = df.loc[near, "attach_recall_pct_mean"]; ny_ = df.loc[near, "attach_precision_pct_mean"]
+        x0, x1, y0, y1 = float(nx_.min()) - 2.0, float(nx_.max()) + 2.0, float(ny_.min()) - 1.6, float(ny_.max()) + 1.6
+        # inset in the empty lower-left quadrant (rule methods sit at low recall / low precision but far left)
+        axin = inset_axes(ax, width="48%", height="42%", loc="lower right", borderpad=1.4)
+        _draw(axin, True, s["fonts"]["size_annot"] - 1.0, ms_scale=1.25)
+        axin.set_xlim(x0, x1); axin.set_ylim(y0, y1)
+        axin.tick_params(labelsize=s["fonts"]["size_annot"] - 2)
+        axin.set_title("放大：AR-GNN 系列", fontsize=s["fonts"]["size_annot"] - 1, pad=2)
+        axin.grid(alpha=s["figure"]["grid_alpha"])
+        for sp in axin.spines.values():
+            sp.set_edgecolor("#888")
+        mark_inset(ax, axin, loc1=2, loc2=4, fc="none", ec="#888", lw=0.7, ls="--")
+    # numbered key
+    key.set_xlim(0, 1); key.set_ylim(0, 1)
+    yy = 0.99
+    key.text(0.0, yy, "编号 → 方法（召回 / 正确率 %）", fontsize=s["fonts"]["size_annot"] + 0.5, fontweight="bold", va="top"); yy -= 0.085
+    step = 0.9 / max(len(shown), 1)
+    for i, name in enumerate(shown, start=1):
+        c = color_for(name)
+        ours = name in ("stage2_ar_gnn", "stage2_ar_gnn_bestof16")
+        key.scatter([0.05], [yy - 0.012], s=110, marker="D" if ours else "o", color=c, edgecolor="white", linewidth=0.8)
+        key.text(0.05, yy - 0.012, str(i), ha="center", va="center", fontsize=s["fonts"]["size_annot"] - 1.5, color="white", fontweight="bold")
+        key.text(0.14, yy - 0.012, _short(name) + f"\n{float(df.loc[name, 'attach_recall_pct_mean']):.1f} / {float(df.loc[name, 'attach_precision_pct_mean']):.1f}", va="center", fontsize=s["fonts"]["size_annot"] - 0.5, linespacing=1.15, color="#222")
+        yy -= step
+    f.suptitle(title_for("R10") + "\n标记 = 3 个随机种子的均值，误差线 = ±1 标准差，浅点 = 单个种子；菱形 = 本文方法", x=0.08, ha="left", fontweight="bold", fontsize=s["fonts"]["size_title"] - 1, linespacing=1.3)
     return savefig(f, out, "R10_stage2_attach_recall_precision")
 
 
@@ -135,7 +148,12 @@ def r11_decoding_tradeoff(results: Path, out: Path) -> list[Path]:
     w = 0.36
     b1 = ax.bar(x - w / 2, df.loc[rows, "overall_pass_mean"] * 100, w, yerr=df.loc[rows, "overall_pass_std"] * 100, color=s["palette"]["ours"], edgecolor="white", capsize=3, label="大纲合格率 (%)")
     b2 = ax2.bar(x + w / 2, df.loc[rows, "aspl_deviation_pct_mean"], w, yerr=df.loc[rows, "aspl_deviation_pct_std"], color=s["palette"]["main"][1], edgecolor="white", capsize=3, label="平均步行路径偏差 (%)")
-    ax.plot(x, df.loc[rows, "attach_precision_pct_mean"], "D-", color=s["palette"]["highlight"], ms=6, lw=1.4, label="分支位置正确率 (%)")
+    ax2.set_zorder(ax.get_zorder() - 1); ax.patch.set_visible(False)  # bars behind, the line in front of *both* bar groups
+    yv = df.loc[rows, "attach_precision_pct_mean"].to_numpy()
+    ax.plot(x, yv, "-", color="white", lw=4.0, zorder=5, solid_capstyle="round")  # halo so the line reads over the orange bars
+    ax.plot(x, yv, "D-", color=s["palette"]["highlight"], ms=6.5, lw=1.6, mec="white", mew=0.8, zorder=6, label="分支位置正确率 (%)")
+    for xi, v in zip(x, yv):
+        ax.annotate(f"{v:.0f}", (xi, v), xytext=(0, 7), textcoords="offset points", ha="center", fontsize=s["fonts"]["size_annot"], color=s["palette"]["highlight"], zorder=7)
     ax.set_ylim(0, 128)  # head-room for the legend above the bars
     ax2.set_ylim(0, max(48.0, float((df.loc[rows, "aspl_deviation_pct_mean"] + df.loc[rows, "aspl_deviation_pct_std"]).max()) * 1.3))
     ax2.grid(False)
@@ -242,3 +260,48 @@ def r14_growth_pattern(results: Path, out: Path) -> list[Path]:
 
 
 ALL = [r09_overview, r10_attach_scatter, r11_decoding_tradeoff, r12_ablation, r13_training_curves, r14_growth_pattern]
+
+
+# --------------------------------------------------------------------------- stage 3 (renovation batch)
+def r15_renovation_batch(results: Path, out: Path) -> list[Path]:
+    """Renovation workflow, batch result on the filtered low-score test floors: paired before / after distributions of
+    the circulation indicators (one panel per indicator; grey segments = individual floors, dots = means) and the share
+    of floors improved, for every available version (v1 / v2 / v2b). Inputs: ``per_floor.csv`` written by
+    ``scripts/renovate_stage3.py`` – looked up in ``<results>/stage3/renovation*/`` then ``outputs/experiments/renovation*/``.
+    Returns [] when no batch has been run (the thesis marks R15 as pending until then)."""
+    from mall_space_planner.stage3.renovate import BETTER, TOPO_LABEL
+
+    cands = sorted([*results.glob("stage3/renovation*"), *Path("outputs/experiments").glob("renovation*")])
+    runs = [(p.name, pd.read_csv(p / "per_floor.csv")) for p in cands if (p / "per_floor.csv").exists()]
+    runs = [(n, d[d["status"] == "ok"]) for n, d in runs if "status" in d]
+    runs = [(n, d) for n, d in runs if len(d) >= 5]
+    if not runs:
+        return []
+    s = load_style()
+    keys = [k for k in ["pred_score", "avg_shortest_path", "diameter", "closeness_mean", "max_betweenness", "n_dead_ends"] if all(f"after_{k}" in d for _, d in runs)]
+    f, axes = plt.subplots(len(runs), len(keys), figsize=(s["figure"]["width_double"] * 1.1, 2.3 * len(runs) + 0.9), squeeze=False)
+    for r, (name, d) in enumerate(runs):
+        for c, k in enumerate(keys):
+            ax = axes[r, c]
+            b, a = d[f"before_{k}"].to_numpy(float), d[f"after_{k}"].to_numpy(float)
+            ok = np.isfinite(b) & np.isfinite(a)
+            b, a = b[ok], a[ok]
+            better = BETTER.get(k, 0)
+            imp = ((a - b) * better > 0) if better else np.zeros_like(a, bool)
+            for bi, ai, im in zip(b, a, imp):
+                ax.plot([0, 1], [bi, ai], color=s["palette"]["ours"] if im else "#BBBBBB", lw=0.7, alpha=0.65 if im else 0.5, zorder=1)
+            ax.scatter([0] * len(b), b, s=9, color="#888", zorder=2); ax.scatter([1] * len(a), a, s=9, color="#888", zorder=2)
+            ax.plot([0, 1], [b.mean(), a.mean()], "o-", color=s["palette"]["highlight"], ms=6, lw=2.0, zorder=3)
+            ax.set_xticks([0, 1]); ax.set_xticklabels(["现状", "更新"], fontsize=s["fonts"]["size_annot"]); ax.set_xlim(-0.35, 1.35)
+            ax.tick_params(axis="y", labelsize=s["fonts"]["size_annot"] - 0.5)
+            ttl = TOPO_LABEL.get(k, k) + (" ↑" if better > 0 else (" ↓" if better < 0 else ""))
+            sub = f"均值 {b.mean():.2f} → {a.mean():.2f}" + (f"\n{imp.mean() * 100:.0f}% 楼层改善" if better else "\n（中性，仅报告）")
+            ax.set_title(f"{ttl}\n{sub}", fontsize=s["fonts"]["size_annot"], linespacing=1.2, pad=4)
+            ax.grid(axis="y", alpha=s["figure"]["grid_alpha"]); ax.spines[["top", "right"]].set_visible(False)
+        axes[r, 0].text(-0.45, 0.5, f"{name}\nn = {len(d)}", transform=axes[r, 0].transAxes, rotation=90, ha="right", va="center", fontsize=s["fonts"]["size_annot"] + 0.5, fontweight="bold")
+    f.suptitle(title_for("R15") + "  — 每条灰 / 蓝线 = 一个真实楼层（蓝 = 改善），红点线 = 均值", x=0.02, ha="left", fontweight="bold")
+    f.tight_layout(rect=(0.03, 0, 1, 0.93))
+    return savefig(f, out, "R15_stage3_renovation")
+
+
+ALL = [*ALL, r15_renovation_batch]
