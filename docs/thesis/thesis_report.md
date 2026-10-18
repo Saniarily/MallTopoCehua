@@ -721,6 +721,29 @@ python scripts/preview_stage3.py --total <floor>_total.csv --m <floor>_M.csv --s
 python scripts/make_thesis_report.py            # 或 --only F09
 ```
 
+### 附录 C.1 · M 系列方法案例图（真实数据、每图 ≥ 3 个不同布局类型的商场）
+
+```bash
+# 前提：data/processed/legacy（prepare_data.py）、stage2_corpus_v2.jsonl、outputs/checkpoints/stage2/stage2_ar_gnn{,_single_label,_bfs_order,_greedy_order}
+python scripts/make_method_figures.py --out docs/thesis/figures_method            # 全部 12 张（png + pdf + svg，文字可编辑）
+python scripts/make_method_figures.py --only M04 M05 M11 --out docs/thesis/figures_method
+```
+
+| 编号 | 对应章节 | 内容 |
+|---|---|---|
+| M01 | §5.1–5.3 | 三类城市各一个真实查询：条件 → 六种类型期望评分 → 首选类型内 Top-3 原型骨架 |
+| M02 | §5.4–5.5 | 同一查询下规则加权 / 极端随机树 / LambdaMART / 深度残差四种排序器的 Top-3 原型 |
+| M03 | §5.2、§8.2.4 | 同一组条件放到三类城市，类型排序的变化与各类首选类型的真实高分案例 |
+| M04 | §6.2–6.3、§8.3.1 | 骨架 → 规则 / 规则+16 / AR-GNN / AR-GNN+16 / 真实（5 种类型各一行，骨架位置固定） |
+| M05 | §6.4、§8.3.3 | 完整模型 vs 单接点标签 vs BFS 顺序 vs 贪心顺序（同一骨架、同一种子） |
+| M06 | §6.5、§8.3.2 | 贪心 τ=0 / 采样 τ=0.7 / 采样+16 择优 |
+| M07 | §6.3–6.4 | 三个真实样本的逐步生长（教师强制），多接点步 = 闭环 |
+| M08 | §7.3–7.6 | 三个真实楼层：轮廓 → 内缩区+中轴 → 初始化 → 松弛修复 → 成廊 → 真实位置 |
+| M09 | §7.5、§8.4.3 | 规则前后：开角 R0 / 断头→出入口 R9 / 非凸轮廓边越界修复 |
+| M10 | §7.6、§8.4.2 | 同一网络放入自身轮廓 / 另一真实轮廓 / 手绘 L / U |
+| M11 | §8.4.4 | 改造 v1 / v2 / v2b 三版本在三个真实楼层上的对比 |
+| M12 | §3.2 | 同一楼层的色块平面 / 完整 M / 骨架 M_s 三层级 |
+
 ## 附录 D · 如何修改图表
 
 - **改文字 / 颜色 / 字号 / 图题**：编辑 `configs/thesis/style.yaml`（`labels`、`palette`、`figure_titles`），然后 `python scripts/make_thesis_report.py`。

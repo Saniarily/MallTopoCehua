@@ -341,3 +341,10 @@ Re-run `export_floor_plates.py --force` to regenerate; `floors.csv` now also rep
 Plate style after designer review: network in 90 % black (skeleton 1.6 px, secondary 0.7 px) over a desaturated
 (×0.55) and lightened (+18 %) colour plan; outline stroke thin grey; orange network kept only for generated / renovation
 figures on flat backgrounds; CJK font chain applied to all hub figures (titles were boxes).
+
+### M-series method-case figures (2026-09-09)
+`scripts/make_method_figures.py` + `reporting/figures_method.py`: 12 figures (M01–M12) that show every method section on
+≥ 3 real malls of different layout types (Stage-1 pipeline / ranker comparison / type-conditional effect; Stage-2 method
+comparison / ablation / decoding / growth steps; Stage-3 fit pipeline / rule before-after / outline transfer; renovation
+v1 / v2 / v2b; data levels). Deterministic case selection, shared frame per row, png + pdf + svg. Sandbox run on the
+synthetic DB + fixture floor: 12/12 OK (watermarked); real figures require the Mac data + AR-GNN checkpoints.
