@@ -384,18 +384,29 @@ def _draw_type_ranking(ax, types, title: str) -> None:  # noqa: ANN001
     ax.set_title(title, fontsize=s["fonts"]["size_annot"], loc="left", pad=4)
 
 
+def _proto_layout_panel(ax, g, node_scale: float = 0.72, size_ref_n: int = 40) -> None:  # noqa: ANN001
+    """Prototype skeleton drawn like M04 (spread-out force layout, all nodes = skeleton style). ``size_ref_n`` fixes the
+    node size across the whole figure regardless of each graph's node count."""
+    from mall_space_planner.reporting.graphdraw import draw_topology, skeleton_layout
+    from mall_space_planner.topology.convert import to_networkx
+
+    G = to_networkx(g)
+    pos = skeleton_layout(G, seed=0)
+    draw_topology(ax, G, set(G.nodes), pos=pos, seed=0, size_ref_n=size_ref_n, node_scale=node_scale)
+
+
 def _proto_panel(ctx: Ctx, ax, rec, node_pt: float = 2.4, fs: float | None = None) -> None:  # noqa: ANN001
-    """One recommended prototype at its real plan coordinates (uniform node size); caption under the panel."""
+    """One recommended prototype in M04-style force layout (uniform node size); caption under the panel."""
     g = ctx.db.get_graph(rec.prototype_id)
     s = load_style()
-    fs = fs if fs is not None else s["fonts"]["size_annot"] - 0.5
+    fs = fs if fs is not None else s["fonts"]["size_annot"] - 1.0
     q = f"{rec.quality_score:.1f}" if rec.quality_score is not None else "–"
-    sim = f" · 相似 {rec.similarity:.2f}" if rec.similarity is not None else ""
+    sim = f"\n相似 {rec.similarity:.2f}" if rec.similarity is not None else ""
     cap = f"#{rec.rank}  {rec.prototype_id}\n{(rec.layout_type.value if rec.layout_type else '')} · 评分 {q}{sim}"
-    if g is None or not _real_pos(g):
+    if g is None:
         ax.axis("off")
     else:
-        draw_plan_graph(ax, g, _real_pos(g), set(g.nodes), node_pt=node_pt, lw=0.9)
+        _proto_layout_panel(ax, g)
     _tag(ax, cap, fs)
 
 
@@ -423,7 +434,7 @@ def m01_stage1_pipeline_cases(ctx: Ctx, out: Path) -> list[Path]:
         cl = int(r["city_cluster"]) if pd.notna(r.get("city_cluster")) else None
         built = f"；实际建成 {r['layout_type']}，评分 {float(r[ctx.db.label_col]):.1f}" if pd.notna(r.get("layout_type")) else ""
         ax = f.add_subplot(gs[hb, :]); ax.axis("off")
-        ax.text(0, 0.0, f"案例 {i + 1}  ·  {label('clusters', str(cl)) if cl else ''}  ·  查询 = 商场 {mall} 的真实条件{built}      ①  六种类型的期望评分（红 = 首选「{top}」）      ②  「{top}」内 Top-3 可比原型（真实平面坐标；候选排除同商场）", fontsize=s["fonts"]["size_annot"] + 0.5, fontweight="bold", va="bottom")
+        ax.text(0, 0.0, f"案例 {i + 1}  ·  {label('clusters', str(cl)) if cl else ''}  ·  查询 = 商场 {mall} 的真实条件{built}      ①  六种类型的期望评分（红 = 首选「{top}」）      ②  「{top}」内 Top-3 可比原型（候选排除同商场）", fontsize=s["fonts"]["size_annot"] + 0.5, fontweight="bold", va="bottom")
         ax = f.add_subplot(gs[b, 0]); ax.axis("off")
         ax.text(0, 1.0, _conditions_text(ctx.db, r), va="top", fontsize=fs, linespacing=1.5)
         ax = f.add_subplot(gs[b, 2])
@@ -475,8 +486,8 @@ def m02_stage1_ranker_comparison(ctx: Ctx, out: Path) -> list[Path]:
                     g = ctx.db.get_graph(rec.prototype_id)
                     qv = f"{rec.quality_score:.1f}" if rec.quality_score is not None else "–"
                     ttl = f"#{rec.rank} {(rec.layout_type.value if rec.layout_type else '')}\n评分 {qv}"
-                    if g is not None and _real_pos(g):
-                        draw_plan_graph(ax, g, _real_pos(g), set(g.nodes), node_pt=2.0, lw=0.8)
+                    if g is not None:
+                        _proto_layout_panel(ax, g, node_scale=0.65)
                     else:
                         ax.axis("off")
                     _tag(ax, ttl, s["fonts"]["size_annot"] - 1)
@@ -488,7 +499,7 @@ def m02_stage1_ranker_comparison(ctx: Ctx, out: Path) -> list[Path]:
         b0, b1 = axes[0, p, 0].get_position(), axes[0, p, K - 1].get_position()
         f.text((b0.x0 + b1.x1) / 2, b0.y1 + 0.055, name, ha="center", va="bottom", fontsize=s["fonts"]["size_label"], fontweight="bold", color=s["palette"]["ours"] if "本文" in name else "#222")
         f.add_artist(plt.Line2D([b0.x0, b1.x1], [b0.y1 + 0.05, b0.y1 + 0.05], color="#999", lw=0.8))
-    f.suptitle("M02  阶段一排序器比较：同一查询（真实条件）下不同排序器给出的 Top-3 可比原型（真实平面坐标；候选 = 同城市类别 / 同面积档 / 其他商场）", x=0.02, ha="left", fontweight="bold")
+    f.suptitle("M02  阶段一排序器比较：同一查询（真实条件）下不同排序器给出的 Top-3 可比原型（候选 = 同城市类别 / 同面积档 / 其他商场）", x=0.02, ha="left", fontweight="bold")
     _note(f, ctx, ctx.is_real_db)
     return savefig(f, out, "M02_stage1_ranker_comparison")
 
@@ -518,12 +529,12 @@ def m03_stage1_type_conditional_effect(ctx: Ctx, out: Path) -> list[Path]:
         if len(sub):
             r = sub.sort_values(ctx.db.label_col, ascending=False).iloc[0]
             g = ctx.db.get_graph(r[ctx.db.id_col])
-            if g is not None and _real_pos(g):
-                draw_plan_graph(ax, g, _real_pos(g), set(g.nodes), node_pt=2.6, lw=1.0)
+            if g is not None:
+                _proto_layout_panel(ax, g, node_scale=0.8)
                 _tag(ax, f"该类城市中「{top}」的真实高分案例\n{r[ctx.db.id_col]} · 评分 {float(r[ctx.db.label_col]):.1f} · {g.num_nodes} 个关键点", s["fonts"]["size_annot"] - 0.5)
                 continue
         ax.axis("off")
-    f.suptitle("M03  类型条件效应：同一组项目条件放到三类城市，布局类型的期望评分排序随之改变（下排：各类城市首选类型的真实建成案例，真实平面坐标）", x=0.02, ha="left", fontweight="bold")
+    f.suptitle("M03  类型条件效应：同一组项目条件放到三类城市，布局类型的期望评分排序随之改变（下排：各类城市首选类型的真实建成案例）", x=0.02, ha="left", fontweight="bold")
     f.text(0.02, 0.915, f"条件取自商场 {base[ctx.db.mall_id_col]}：{_conditions_text(ctx.db, base).replace(chr(10), '；')}", fontsize=s["fonts"]["size_annot"] - 1, color="#555")
     f.tight_layout(rect=(0, 0.03, 1, 0.89))
     _note(f, ctx, ctx.is_real_db)
@@ -825,22 +836,23 @@ def _mark_bad(ax, g, P, outline, min_deg: float = 45.0) -> tuple[int, int, int]:
 
 
 def m09_stage3_rule_before_after(ctx: Ctx, out: Path) -> list[Path]:
-    """Problem → fix, same floor / network / seed: (a) outline-unaware embedding vs outline fit; (b) sharp wedges
-    without vs with the angle rule R0; (c) L outline: edges across the re-entrant corner without vs with edge
-    containment. Floors are screened so that the 'before' panel actually shows the problem."""
+    """Rule off vs on on the same floor / network / seed, shown as clean corridor plans (network in outline + one-click
+    corridors), one pair per rule: (a) angle rule R0, (b) dead-end → entrance / leaf-to-façade force R9, (c) L outline
+    edge containment. Metrics in the captions carry the before/after difference."""
     from mall_space_planner.data.corpus_builder import load_target_csv
     from mall_space_planner.data.legacy_adapter import load_graph_csv
-    from mall_space_planner.hub.viz import draw_network_in_outline
-    from mall_space_planner.stage3 import FitParams, outline_from_points
+    from mall_space_planner.hub.viz import draw_network_in_outline, draw_plan
+    from mall_space_planner.stage3 import CorridorFitter, FitParams, RenderParams, outline_from_points, render_corridors
+    from mall_space_planner.stage3.fit import edges_outside, sharp_angle_rate
 
-    cands = _stage3_floors(ctx, 8, max_nodes=55, min_nodes=14)
+    cands = _stage3_floors(ctx, 6, max_nodes=55, min_nodes=14)
     if not cands:
         return []
     s = load_style()
     fs = s["fonts"]["size_annot"] - 0.5
     gd = ctx.graph_dir
-    fp_full = FitParams(n_restarts=4, iters=100)
-    fp_noangle = FitParams(n_restarts=4, iters=100, min_angle_deg=0.0, w_angle=0.0)
+    rp = RenderParams(corridor_ratio=0.17, main_width=7.0, min_width=2.6, secondary_factor=0.6)
+    fp_on = FitParams(n_restarts=4, iters=100)
     rows = []
     for fid in cands:
         topo = load_target_csv(gd / f"{fid}_M.csv")
@@ -850,51 +862,51 @@ def m09_stage3_rule_before_after(ctx: Ctx, out: Path) -> list[Path]:
         g = nx.Graph(topo.edges()); g.add_nodes_from(topo.nodes)
         A = o.area; w = np.sqrt(A / (1 - 0.58**2))
         L = outline_from_points([(0, 0), (w, 0), (w, 0.42 * w), (0.42 * w, 0.42 * w), (0.42 * w, w), (0, w)])
-        P_naive = _naive_embedding(topo, o, skn)
-        from mall_space_planner.stage3.fit import edges_outside, sharp_angle_rate
 
-        # (b): among a few seeds take the one where switching the rule off hurts most (same seed for off / on)
-        best_b = None
+        def _pl(res, oo):  # noqa: ANN001, ANN202
+            return render_corridors(topo, res.positions, oo, res.roles, rp, skeleton_nodes=skn)
+
+        # (a) angle rule: pick the seed where switching it off hurts most
+        best = None
         for sd in (0, 1, 2):
-            r_na, p_na = _fit_with(topo, o, skn, fp_noangle, seed=sd)
-            r_a, p_a = _fit_with(topo, o, skn, fp_full, seed=sd)
-            gain = sharp_angle_rate(g, p_na, 60.0) - sharp_angle_rate(g, p_a, 60.0)
-            if best_b is None or gain > best_b[0]:
-                best_b = (gain, (r_na, p_na), (r_a, p_a))
-        gain_a, (res_na, P_na), (res_a, P_a) = best_b
-        # (c)-before: the pre-fix behaviour = only *nodes* are forced inside the outline (naive embedding scaled into the
-        # L's box, outside nodes projected onto the L's interior); corridors may still cut across the re-entrant corner
+            r0 = CorridorFitter(FitParams(n_restarts=4, iters=100, min_angle_deg=0.0, w_angle=0.0)).fit(topo, o, seed=sd, skeleton_nodes=skn)
+            r1 = CorridorFitter(fp_on).fit(topo, o, seed=sd, skeleton_nodes=skn)
+            gain = r0.diagnostics["sharp_angle_rate"] - r1.diagnostics["sharp_angle_rate"]
+            if best is None or gain > best[0]:
+                best = (gain, r0, r1)
+        gain_a, ra0, ra1 = best
+        # (b) leaf→façade force off vs on (dead ends become interior cores vs entrances)
+        rb0 = CorridorFitter(FitParams(n_restarts=4, iters=100, w_leaf_facade=0.0)).fit(topo, o, seed=0, skeleton_nodes=skn)
+        pb0, pb1 = _pl(rb0, o), _pl(ra1, o)
+        gain_b = pb0.diagnostics["n_vertical_cores"] - pb1.diagnostics["n_vertical_cores"]
+        # (c) L outline: node-only containment (pre-fix) vs edge containment
         P_off = _nodes_only_inside(_naive_embedding(topo, L, skn), L)
         n_off = edges_outside(g, P_off, L.polygon.buffer(-1.0))
-        res_on, P_on = _fit_with(topo, L, skn, fp_full, seed=0)
-        gain_c = n_off - edges_outside(g, P_on, L.polygon.buffer(-1.0))
-        rows.append((gain_a + 0.3 * gain_c, fid, topo, skn, o, L, g, P_naive, (res_na, P_na), (res_a, P_a), P_off, P_on))
-        if len(rows) >= 6:
+        rc1 = CorridorFitter(fp_on).fit(topo, L, seed=0, skeleton_nodes=skn)
+        rows.append((gain_a + 0.1 * gain_b + 0.2 * n_off, fid, topo, skn, o, L, g, (ra0, ra1), (rb0, pb0, pb1), (P_off, n_off, rc1)))
+        if len(rows) >= 5:
             break
     rows.sort(key=lambda r: -r[0])
     rows = rows[:3]
-    cols = ["(a) 前：不考虑轮廓的\n平面嵌入", "(a) 后：轮廓自适应\n拟合", "(b) 前：关闭开角\n规则", "(b) 后：开角规则\n≥ 60°（R0）", "(c) 前：L 形轮廓\n只约束节点在内", "(c) 后：L 形轮廓\n边越界修复"]
+    cols = ["(a) 关闭开角规则", "(a) 开角规则 ≥ 60°（R0）", "(b) 无断头→立面力\n（走廊方案）", "(b) 断头 → 出入口（R9）\n（走廊方案）", "(c) L 形轮廓\n只约束节点在内", "(c) L 形轮廓\n边越界修复 → 成廊"]
     f, axes = plt.subplots(len(rows), 6, figsize=(s["figure"]["width_double"] * 1.4, max(3.1 * len(rows) + 1.8, 5.4)), gridspec_kw={"hspace": 0.6, "wspace": 0.08})
     axes = np.atleast_2d(axes)
-    for r, (_, fid, topo, skn, o, L, g, P_naive, (res_na, P_na), (res_a, P_a), P_off, P_on) in enumerate(rows):
-        panels = [(o, P_naive, None), (o, P_a, res_a), (o, P_na, res_na), (o, P_a, res_a), (L, P_off, None), (L, P_on, None)]
-        for c, (oo, P, res) in enumerate(panels):
-            ax = axes[r, c]
-            draw_network_in_outline(ax, topo, P, oo, skn, node_size=9)
-            e_out, sharp, n_out = _mark_bad(ax, g, P, oo)
-            from mall_space_planner.stage3.fit import _crossings
-
-            cr = _crossings(g, P)
-            from mall_space_planner.stage3.fit import sharp_angle_rate
-
-            lines = [f"交叉 {cr} · 越界边 {e_out}"]
-            if c in (0, 1):
-                lines.append(f"轮廓外节点 {n_out}")
-            if c in (2, 3):
-                lines += [f"锐角率(<60°) {sharp_angle_rate(g, P, 60.0):.2f}", f"尖锐节点(<45°) {sharp}"]
-            _tag(ax, "\n".join(lines), fs - 0.5)
+    for r, (_, fid, topo, skn, o, L, g, (ra0, ra1), (rb0, pb0, pb1), (P_off, n_off, rc1)) in enumerate(rows):
+        for c, res in ((0, ra0), (1, ra1)):
+            P = {k: np.asarray(v) for k, v in res.positions.items()}
+            draw_network_in_outline(axes[r, c], topo, P, o, skn, node_size=9)
+            _tag(axes[r, c], f"锐角率(<60°) {sharp_angle_rate(g, P, 60.0):.2f}\n交叉 {res.diagnostics['crossings']} · 墙向偏差 {res.diagnostics['ortho_deviation_deg']:.0f}°", fs)
+        for c, pl in ((2, pb0), (3, pb1)):
+            d = pl.diagnostics
+            draw_plan(axes[r, c], pl, o)
+            _tag(axes[r, c], f"{d['n_entrances']} 出入口 · {d['n_vertical_cores']} 内部竖向核\n{d['n_atria']} 中庭 · 占比 {d['corridor_ratio'] * 100:.0f}%", fs)
+        draw_network_in_outline(axes[r, 4], topo, P_off, L, skn, node_size=9)
+        _tag(axes[r, 4], f"越出建筑的走廊段 {n_off}", fs)
+        plc = _pl(rc1, L); d = plc.diagnostics
+        draw_plan(axes[r, 5], plc, L)
+        _tag(axes[r, 5], f"越界边 {rc1.diagnostics.get('edges_outside', 0)} · 交叉 {rc1.diagnostics['crossings']}\n{d['n_entrances']} 出入口 · {d['n_atria']} 中庭 · 占比 {d['corridor_ratio'] * 100:.0f}%", fs)
         axes[r, 0].text(-0.08, 0.5, f"{_floor_type(ctx, fid)}\n{fid}\n{topo.num_nodes} 节点", transform=axes[r, 0].transAxes, ha="right", va="center", fontsize=s["fonts"]["size_annot"], rotation=90)
-    _finish_grid(f, axes, cols, "M09  阶段三规则的前后对比（同一楼层、同一网络、同一随机种子）：红线 = 越出建筑的走廊段，红圈 = 含 < 45° 夹角的节点，红叉 = 轮廓外的节点", bottom=0.04)
+    _finish_grid(f, axes, cols, "M09  阶段三规则的前后对比（同一楼层、同一网络、同一随机种子）：(a) 开角 (b) 断头→出入口 (c) 非凸轮廓的边越界修复", bottom=0.04)
     _note(f, ctx, ctx.is_real_graphs)
     return savefig(f, out, "M09_stage3_rule_before_after")
 
