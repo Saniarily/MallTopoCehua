@@ -348,3 +348,17 @@ figures on flat backgrounds; CJK font chain applied to all hub figures (titles w
 comparison / ablation / decoding / growth steps; Stage-3 fit pipeline / rule before-after / outline transfer; renovation
 v1 / v2 / v2b; data levels). Deterministic case selection, shared frame per row, png + pdf + svg. Sandbox run on the
 synthetic DB + fixture floor: 12/12 OK (watermarked); real figures require the Mac data + AR-GNN checkpoints.
+
+### M-series revision after designer review (2026-09-09)
+Stage-1 prototypes (M01–M03) are now drawn at their **real plan coordinates** (CenterPoint) with one node size / line
+width per figure; captions moved below the panels and column headers get a computed band (`_finish_grid`) so no text
+overlaps. M07: smaller nodes, red new connections drawn above the nodes. M09 now shows *problem → fix* per rule:
+(a) outline-unaware embedding vs outline fit (red × = node outside, red segments = corridor outside), (b) angle rule
+off vs on with the seed where it matters most (red rings = nodes with < 45° wedges), (c) L outline with node-only
+containment (pre-fix) vs edge containment. M10 picks, per outline, the best of 3 seeds by a geometric-quality score
+(crossings, outside edges, sharp wedges, interior dead ends, corridor share) and ranks candidate floors by the same
+score; thinner corridor parameters (ratio 0.17, min width 2.6 m). M11/M12: metrics as 2–3-line captions; M12 shows the
+published colour plan untouched (no desaturation) and the networks on separate white plates.
+R10 redrawn: numbered markers + numbered key (no leader lines), zoom inset on the AR-GNN cluster; R11: precision line
+drawn above both bar groups with a white halo and value labels; R15 implemented (paired before/after per floor from
+`outputs/experiments/renovation*/per_floor.csv`, one row per version).

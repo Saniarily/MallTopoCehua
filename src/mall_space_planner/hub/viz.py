@@ -64,6 +64,31 @@ NETWORK_STYLES = {
 }
 
 
+def _equal_keep_box(ax, bounds=None, pad: float = 0.04) -> None:  # noqa: ANN001
+    """Equal aspect without shrinking the axes box: widen the data limits to the box aspect (keeps titles / captions
+    aligned across a row of panels with differently shaped outlines)."""
+    ax.axis("off")
+    if bounds is None:
+        ax.relim(); ax.autoscale_view()
+        x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
+    else:
+        x0, y0, x1, y1 = bounds
+    w, h = max(x1 - x0, 1e-9), max(y1 - y0, 1e-9)
+    x0, x1, y0, y1 = x0 - pad * w, x1 + pad * w, y0 - pad * h, y1 + pad * h
+    w, h = x1 - x0, y1 - y0
+    try:
+        ax.figure.canvas.draw()
+        bb = ax.get_window_extent()
+        box_aspect = bb.height / max(bb.width, 1e-9)
+    except Exception:  # noqa: BLE001
+        box_aspect = 1.0
+    if h / w < box_aspect:
+        extra = w * box_aspect - h; y0, y1 = y0 - extra / 2, y1 + extra / 2
+    else:
+        extra = h / box_aspect - w; x0, x1 = x0 - extra / 2, x1 + extra / 2
+    ax.set_xlim(x0, x1); ax.set_ylim(y0, y1); ax.set_aspect("equal", adjustable="box")
+
+
 def draw_network_in_outline(ax, topo, pos: dict, outline, skeleton_nodes: set | None = None, title: str = "", anchored=None, node_size: float = 16.0, style: str = "orange") -> None:  # noqa: ANN001
     st = NETWORK_STYLES[style]
     sk = set(skeleton_nodes or ())
@@ -79,7 +104,7 @@ def draw_network_in_outline(ax, topo, pos: dict, outline, skeleton_nodes: set | 
     for v in anchored or ():
         if v in pos:
             ax.scatter([pos[v][0]], [pos[v][1]], s=70, facecolors="none", edgecolors="#D9480F", linewidths=1.2, zorder=6)
-    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
+    _equal_keep_box(ax, outline.polygon.bounds if outline is not None else None)
     if title:
         ax.set_title(title, fontsize=9)
 
@@ -95,7 +120,7 @@ def draw_plan(ax, plan, outline, title: str = "") -> None:  # noqa: ANN001
         ax.scatter([e["point"][0]], [e["point"][1]], marker="v", s=60, c="#D9480F", zorder=6)
     for vc in plan.vertical_cores:
         poly(ax, vc["polygon"], fc="#9e9e9e", ec="#555", lw=0.5)
-    ax.set_aspect("equal"); ax.autoscale(); ax.axis("off")
+    _equal_keep_box(ax, outline.polygon.bounds)
     if title:
         ax.set_title(title, fontsize=9)
 
